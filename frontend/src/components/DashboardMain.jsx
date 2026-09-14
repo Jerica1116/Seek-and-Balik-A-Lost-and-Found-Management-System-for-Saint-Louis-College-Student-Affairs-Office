@@ -6,6 +6,7 @@ import FoundItems from "../pages/FoundItems";
 import Reports from "../pages/Reports";
 import Users from "../pages/Users";
 import ModeratorLostItems from "../pages/ModeratorLostItems";
+import ActivityLogs from "../pages/ActivityLogs";
 
 import RequireRole from "../components/RequireRole";
 
@@ -35,6 +36,15 @@ const DashboardMain = () => {
         element={
           <RequireRole allowedRoles={["admin"]}>
             <Users />
+          </RequireRole>
+        }
+      />
+
+      <Route
+        path="activity-logs"
+        element={
+          <RequireRole allowedRoles={["admin"]}>
+            <ActivityLogs />
           </RequireRole>
         }
       />

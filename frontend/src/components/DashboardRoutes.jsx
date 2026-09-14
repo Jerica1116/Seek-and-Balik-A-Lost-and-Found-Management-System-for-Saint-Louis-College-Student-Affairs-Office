@@ -1,4 +1,5 @@
-import { Routes, Route } from "react-router-dom";
+import React from "react";
+import { Routes, Route, Navigate } from "react-router-dom";
 
 import DashboardHome from "../pages/Dashboard";
 import LostItems from "../pages/LostItems";
@@ -7,29 +8,27 @@ import Reports from "../pages/Reports";
 import Users from "../pages/Users";
 import ModeratorLostItems from "../pages/ModeratorLostItems";
 import ClaimRequests from "../pages/ClaimRequests";
-import Leaderboard from "../pages/Leaderboards";
+import LeaderboardControl from "../pages/LeaderboardControl";
+import ActivityLogs from "../pages/ActivityLogs";
+
 
 import RequireRole from "../components/RequireRole";
-import LeaderboardControl from "../pages/LeaderboardControl";
+import QuestionBank from "../components/QuestionBank";
 
 const DashboardRoutes = () => {
   return (
     <Routes>
+      {/* 1. Main Dashboard (/dashboard) */}
+      <Route index element={<DashboardHome />} />
 
-      {/* COMMON */}
-      <Route path="/" element={<DashboardHome />} />
+      {/* 2. Standard Items */}
       <Route path="lost-items" element={<LostItems />} />
       <Route path="surrendered-items" element={<FoundItems />} />
-      <Route path="reports" element={<Reports />} />
       <Route path="claim-requests" element={<ClaimRequests />} />
-      <Route
-        path="leaderboard"
-        element={
-            <LeaderboardControl />
-        }
-      />
+      <Route path="reports" element={<Reports />} />
+      <Route path="leaderboard" element={<LeaderboardControl />} />
 
-      {/* MODERATOR ONLY */}
+      {/* 3. Moderator Items */}
       <Route
         path="moderator-lost"
         element={
@@ -39,7 +38,7 @@ const DashboardRoutes = () => {
         }
       />
 
-      {/* ADMIN ONLY */}
+      {/* 4. Admin Items */}
       <Route
         path="users"
         element={
@@ -49,6 +48,13 @@ const DashboardRoutes = () => {
         }
       />
 
+      {/* 5. Utilities */}
+      <Route path="utilities/question-bank" element={<QuestionBank />} />
+      <Route path="utilities/activity-logs" element={<ActivityLogs />} />
+      <Route path="activity-logs" element={<ActivityLogs />} />
+
+      {/* Fallback inside dashboard */}
+      <Route path="*" element={<Navigate to="/dashboard" replace />} />
     </Routes>
   );
 };

@@ -1,8 +1,6 @@
 from django.urls import path
-from .views import create_notification, get_notification, update_notification
+from .views import report_item_public
 
 urlpatterns = [
-    path('notifications/', get_notification, name='get_notification'),
-    path('notifications/create/', create_notification, name='create_notification'),
-    path('notifications/<int:pk>/', update_notification, name='update_notification'),
+    path('report-lost/', report_item_public, name='report_item_public'),
 ]

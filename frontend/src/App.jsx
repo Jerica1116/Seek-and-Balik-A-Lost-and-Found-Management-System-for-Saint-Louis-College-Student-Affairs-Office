@@ -1,29 +1,39 @@
-import { BrowserRouter as Router, Routes, Route } from "react-router-dom";
+import React from "react";
+import { BrowserRouter as Router, Routes, Route, Navigate } from "react-router-dom";
 import { AppProvider } from "./context/AppContext";
-
-import AppInner from "./pages/AppInner";
-import TrackItemPage from "./pages/TrackItemPage";
+import AppInner from "./pages/AppInner"; 
 import DashboardLayout from "./components/DashboardLayout";
 import DashboardRoutes from "./components/DashboardRoutes";
 import Leaderboard from "./pages/Leaderboards";
-
+import RequireRole from "./components/RequireRole";
+import 'leaflet/dist/leaflet.css';
+import HelpPage from "./pages/HelpPage";
 export default function App() {
   return (
     <AppProvider>
       <Router>
         <Routes>
 
-          {/* PUBLIC */}
+          {/* PUBLIC PAGES */}
           <Route path="/" element={<AppInner />} />
-          <Route path="/track" element={<TrackItemPage />} />
-
-          {/* 1. ADD THIS LINE FOR A DEDICATED PAGE */}
           <Route path="/leaderboard" element={<Leaderboard />} />
+          <Route path="/help" element={<HelpPage />} />
 
-          {/* DASHBOARD */}
-          <Route path="/dashboard/*" element={<DashboardLayout />}>
+          {/* DASHBOARD ROUTE — admin & moderator only. Student/school-ID
+              accounts (and anyone not logged in) get bounced back to "/". */}
+          <Route
+            path="/dashboard/*"
+            element={
+              <RequireRole allowedRoles={["admin", "moderator"]} redirectTo="/">
+                <DashboardLayout />
+              </RequireRole>
+            }
+          >
             <Route path="*" element={<DashboardRoutes />} />
           </Route>
+
+          {/* FALLBACK REDIRECT TO HOME */}
+          <Route path="*" element={<Navigate to="/" replace />} />
 
         </Routes>
       </Router>

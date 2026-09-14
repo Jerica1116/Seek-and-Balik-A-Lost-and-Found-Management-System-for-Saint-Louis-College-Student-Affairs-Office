@@ -1,5 +1,6 @@
 import slcLogo from "../assets/slc-logo.png";
 import saoLogo from "../assets/sao.png";
+import seekBalikLogo from "../assets/seek-balik-logo.jpg";
 
 const Header = ({
   variant = "public",
@@ -8,36 +9,37 @@ const Header = ({
   onOpenLogin,
   showLogin = false,
   rightContent,
+  onLogoClick,
 }) => {
   return (
-    <header className="w-full bg-[#005F86] border-b border-white/10 px-4 sm:px-6 lg:px-8 py-3 sm:py-4 flex flex-col md:flex-row md:justify-between md:items-center gap-4">
+    <header className="w-full bg-[#005F86] border-b border-white/10 px-4 sm:px-5 lg:px-6 py-2 sm:py-3 flex flex-col md:flex-row md:justify-between md:items-center gap-4">
 
-  <div className="flex items-center gap-3 sm:gap-5 min-w-0">
+  <div className="flex items-center gap-3 sm:gap-4 min-w-0">
 
     <div className="flex items-center gap-2 sm:gap-3 flex-shrink-0">
       <img
         src={slcLogo}
         alt="SLC Logo"
-        className="w-14 h-14 sm:w-16 sm:h-16 lg:w-20 lg:h-20 object-contain"
+        onClick={onLogoClick}
+        className={`w-12 h-12 sm:w-14 sm:h-14 lg:w-16 lg:h-16 object-contain ${
+          onLogoClick ? "cursor-pointer hover:opacity-80 transition-opacity" : ""
+        }`}
       />
 
+  
       <img
         src={saoLogo}
         alt="SAO Logo"
-        className="w-12 h-12 sm:w-14 sm:h-14 lg:w-18 lg:h-18 object-contain rounded-full"
+        className="w-10 h-10 sm:w-12 sm:h-12 lg:w-14 lg:h-14 object-contain rounded-full"
       />
     </div>
 
     <div className="leading-tight min-w-0">
-      <h1 className="text-white text-2xl sm:text-3xl lg:text-5xl font-normal font-old-english leading-none">
+      <h1 className="text-white text-2xl sm:text-3xl lg:text-4xl font-normal font-old-english leading-none">
         Saint Louis College
       </h1>
 
-      <p className="text-white italic text-xs sm:text-base lg:text-xl mt-1">
-        Lingsat, City of San Fernando, La Union
-      </p>
-
-      <p className="text-white text-xs sm:text-base lg:text-xl">
+      <p className="text-white text-xs sm:text-sm lg:text-base mt-1">
         Seek & Balik: A Lost and Found Management System
       </p>
     </div>
@@ -61,9 +63,9 @@ const Header = ({
       {!rightContent && showLogin && (
         <button
           onClick={onOpenLogin}
-          className="w-full sm:w-auto px-6 py-2 rounded-full border border-white/40 bg-white/10 hover:bg-white/20 text-white transition"
+          className="w-full sm:w-auto px-6 py-2 full border border-white/40 bg-white/10 hover:bg-white/20 text-white transition"
         >
-          Staff Login
+          Login
         </button>
       )}
     </div>

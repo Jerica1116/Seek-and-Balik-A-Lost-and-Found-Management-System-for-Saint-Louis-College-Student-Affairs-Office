@@ -1,0 +1,13 @@
+{
+  "dependencies": {
+    "bcrypt": "^6.0.0",
+    "cors": "^2.8.6",
+    "crypto": "^1.0.1",
+    "dotenv": "^17.4.2",
+    "express": "^5.2.1",
+    "leaflet": "^1.9.4",
+    "nodemailer": "^9.0.5",
+    "react-icons": "^5.7.0",
+    "react-leaflet": "^5.0.0"
+  }
+}

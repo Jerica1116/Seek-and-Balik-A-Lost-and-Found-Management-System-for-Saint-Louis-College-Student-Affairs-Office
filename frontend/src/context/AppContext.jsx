@@ -1,11 +1,10 @@
-import React, { createContext, useContext, useState, useRef } from 'react';
-import { createClaim } from "../api/api";
+import React, { createContext, useContext, useState, useEffect, useRef } from 'react';
+import { createClaim, getCurrentUser } from "../api/api";
 
 const AppContext = createContext(null);
 export const useApp = () => useContext(AppContext);
 
 export const AppProvider = ({ children }) => {
-
   // =====================
   // STATE
   // =====================
@@ -13,27 +12,92 @@ export const AppProvider = ({ children }) => {
   const [foundItems, setFoundItems] = useState([]);
   const [users, setUsers] = useState([]);
 
-  // FIX: stable counters (DO NOT reset on rerender)
+  // Counters
   const lostCounter = useRef(1);
   const foundCounter = useRef(1);
   const userCounter = useRef(1);
 
   // =====================
+  // AUTHENTICATION STATE
+  // =====================
+  const [currentUser, setCurrentUser] = useState(null);
+  const [authLoading, setAuthLoading] = useState(true);
+  const [isLoggedIn, setIsLoggedIn] = useState(
+    () => localStorage.getItem('isLoggedIn') === 'true'
+  );
+  const [userRole, setUserRole] = useState(
+    () => localStorage.getItem('userRole') || ''
+  );
+
+  // Restore authenticated session on initial mount
+  useEffect(() => {
+    const initAuth = async () => {
+      const token = localStorage.getItem('accessToken');
+      if (token) {
+        try {
+          const user = await getCurrentUser();
+          setCurrentUser(user);
+          setIsLoggedIn(true);
+          setUserRole(user.role || '');
+          localStorage.setItem('isLoggedIn', 'true');
+          if (user.role) localStorage.setItem('userRole', user.role);
+        } catch (err) {
+          console.error("Session verification failed:", err);
+          logout();
+        }
+      }
+      setAuthLoading(false);
+    };
+
+    initAuth();
+  }, []);
+
+  // Login handler accepting user profile object or role string
+  const setLogin = (userOrRole) => {
+    setIsLoggedIn(true);
+
+    if (typeof userOrRole === 'object' && userOrRole !== null) {
+      setCurrentUser(userOrRole);
+      setUserRole(userOrRole.role || '');
+      localStorage.setItem('userRole', userOrRole.role || '');
+    } else {
+      setUserRole(userOrRole);
+      localStorage.setItem('userRole', userOrRole);
+    }
+
+    localStorage.setItem('isLoggedIn', 'true');
+  };
+
+  // Complete session reset
+  const logout = () => {
+    setIsLoggedIn(false);
+    setUserRole('');
+    setCurrentUser(null);
+    localStorage.removeItem('isLoggedIn');
+    localStorage.removeItem('userRole');
+    localStorage.removeItem('accessToken');
+    localStorage.removeItem('refreshToken');
+  };
+
+  // =====================
   // CLAIM API
   // =====================
+  // FIX: this previously hand-picked only a subset of fields
+  // (item, claimant_name, claimant_contact, claimant_email,
+  // meeting_date, meeting_time, proof_description), silently dropping
+  // question_1..4, answer_1..4, other_description, and
+  // needs_manual_review before the request ever left the browser.
+  // ClaimModal.jsx sends all of those, and ClaimRequests.jsx reads all
+  // of them back (buildAnswerComparison, the Review modal's per-
+  // question breakdown, isPendingReview's needs_manual_review check,
+  // etc.) — so any claim submitted through the old whitelist either
+  // came back malformed or was rejected outright by the backend
+  // serializer if those fields were required, meaning it never got
+  // created and could never show up in getClaims(). Forwarding the
+  // full payload through unchanged fixes both cases.
   const submitClaimRequest = async (data) => {
-  console.log("Submitting claim payload:", data);
-
-    return await createClaim({
-      item: data.item,
-      claimant_name: data.claimant_name,
-      claimant_contact: data.claimant_contact,
-      claimant_email: data.claimant_email,
-      meeting_date: data.meeting_date,
-      meeting_time: data.meeting_time,
-      proof_description: data.proof_description,
-  });
-};
+    return await createClaim(data);
+  };
 
   // =====================
   // LOST ITEMS
@@ -92,31 +156,6 @@ export const AppProvider = ({ children }) => {
   const deleteUser = (id) =>
     setUsers(p => p.filter(x => x.id !== id));
 
-  // =====================
-  // AUTH
-  // =====================
-  const [isLoggedIn, setIsLoggedIn] = useState(
-    () => localStorage.getItem('isLoggedIn') === 'true'
-  );
-
-  const [userRole, setUserRole] = useState(
-    () => localStorage.getItem('userRole') || ''
-  );
-
-  const setLogin = (role) => {
-    setIsLoggedIn(true);
-    setUserRole(role);
-    localStorage.setItem('isLoggedIn', 'true');
-    localStorage.setItem('userRole', role);
-  };
-
-  const logout = () => {
-    setIsLoggedIn(false);
-    setUserRole('');
-    localStorage.removeItem('isLoggedIn');
-    localStorage.removeItem('userRole');
-  };
-
   return (
     <AppContext.Provider
       value={{
@@ -138,9 +177,13 @@ export const AppProvider = ({ children }) => {
 
         submitClaimRequest,
 
+        // Auth properties
+        currentUser,
+        setCurrentUser,
+        authLoading,
         isLoggedIn,
-        setLogin,
         userRole,
+        setLogin,
         logout
       }}
     >
