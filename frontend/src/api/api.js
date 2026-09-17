@@ -40,13 +40,16 @@ api.interceptors.request.use(
 // access token. Only falls through to logging the user out if the
 // refresh itself fails (i.e. the refresh token is also expired/invalid).
 //
-// ASSUMPTION: the refresh endpoint lives at "account/token/refresh/",
-// matching the existing account/login/, account/register/,
-// account/current/ naming pattern in this file. If your urls.py maps
-// SimpleJWT's TokenRefreshView somewhere else (e.g. "token/refresh/"),
-// update REFRESH_ENDPOINT below to match.
+// FIX: REFRESH_ENDPOINT was previously "account/token/refresh/", which
+// doesn't match urls.py — the refresh view is registered at
+// path('refresh/', refresh_token, ...) under the account/ prefix, i.e.
+// "account/refresh/". The mismatched endpoint meant every refresh
+// attempt 404'd instead of actually refreshing, so this whole
+// queue-and-retry flow never got a chance to run: it always fell
+// through to onAuthFailure() the moment an access token expired, even
+// though the refresh token itself was still perfectly valid.
 //
-// FIX: two gaps in the original version of this interceptor:
+// FIX: two further gaps in the original version of this interceptor:
 //
 // 1. A 401 from account/login/ itself (e.g. wrong password on the
 //    login screen) used to fall into this same refresh flow and try
@@ -72,7 +75,7 @@ api.interceptors.request.use(
 //    leaving them to poll a dead session indefinitely.
 // ==========================================================
 
-const REFRESH_ENDPOINT = "account/token/refresh/";
+const REFRESH_ENDPOINT = "account/refresh/";
 const LOGIN_ENDPOINT = "account/login/";
 
 let isRefreshing = false;
@@ -205,6 +208,41 @@ export const getClaims = async () => {
 
 export const scheduleMeeting = async (id, data) => {
   const res = await api.put(`claim/schedule/${id}/`, data);
+  return res.data;
+};
+
+// ==========================================================
+// DECLINE A CLAIM (staff-only)
+//
+// Backs the "Decline" button in ClaimRequests.jsx's Review modal —
+// the counterpart to "Approve" on a claim whose verification answers
+// were flagged against the item's recorded answers. Rejects the claim
+// outright instead of scheduling a verification meeting for it.
+//
+// ClaimRequests.jsx calls this as declineClaim(id, { status: "declined" })
+// and then filters the claim out of both tables via its isDeclined()
+// helper, which checks `claim.status === "declined"` (case-insensitive).
+//
+// ASSUMPTION — endpoint: routed at "claim/decline/<id>/", mirroring the
+// existing "claim/schedule/<id>/" pattern above. There is no generic
+// claim-detail route in this file, so unless one already exists in your
+// urls.py you need to add this view. Under the claim/ prefix:
+//
+//     path('decline/<int:pk>/', decline_claim, name='decline-claim'),
+//
+// with a view that sets the claim's status field and saves. PATCH is
+// used rather than PUT so a partial body ({ status }) doesn't need to
+// carry meeting_date/meeting_time — if you wire this to a DRF
+// APIView/generic that only implements PUT, switch `.patch` to `.put`.
+//
+// ASSUMPTION — field: the Claim model exposes a `status` field, and the
+// claim serializer used by getClaims() RETURNS it. If it doesn't, the
+// decline will persist server-side but the claim will reappear in
+// "Needs Attention" on the very next 5s poll, because isDeclined() has
+// nothing to read. Add `status` to that serializer's fields.
+// ==========================================================
+export const declineClaim = async (id, data = { status: "declined" }) => {
+  const res = await api.patch(`claim/decline/${id}/`, data);
   return res.data;
 };
 
@@ -341,8 +379,8 @@ export async function getUserById(id) {
 // getCurrentUser() above, since that's already how this backend resolves
 // "the logged-in user" from the JWT — no id needs to be passed in, unlike
 // updateUserById() below which is the admin-editing-someone-else path.
-// NOTE: confirm with your backend whether account/current/ accepts PATCH
-// for partial updates — swap `.patch` to `.put` here if it only supports PUT.
+// current_user() in views.py now handles both GET and PATCH on this
+// route, so `.patch` here is correct.
 export async function getProfile() {
   const res = await api.get("account/current/");
   return res.data;

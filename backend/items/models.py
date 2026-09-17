@@ -108,6 +108,26 @@ class ItemDetails(models.Model):
 
     time_stamp = models.DateTimeField(auto_now_add=True)
 
+    # ------------------------------------------------------------------
+    # CLAIM TRACKING
+    #
+    # Set by FoundItems.jsx's handleClaimItem() at the moment staff mark
+    # an item as claimed (status -> 'Claimed'), so the Found Items table
+    # can show "Date Claimed" alongside "Date Found" (created_date). Both
+    # stay null until then. claimed_time is a plain CharField (not
+    # TimeField) to match how meeting_time is stored on the Claim model —
+    # the frontend sends a simple "HH:MM" string
+    # (now.toTimeString().slice(0, 5)), and TimeField would need the same
+    # kind of extra input/output format handling created_time already has
+    # in ItemSerializers.
+    #
+    # Since ItemSerializers.Meta.fields = '__all__', no serializer change
+    # is needed — these are picked up automatically once added here and
+    # migrated.
+    # ------------------------------------------------------------------
+    claimed_date = models.DateField(null=True, blank=True)
+    claimed_time = models.CharField(max_length=20, null=True, blank=True)
+
     #GAMIFICATION
     surrender_points_awarded = models.BooleanField(default=False)
     claimed_bonus_awarded = models.BooleanField(default=False)

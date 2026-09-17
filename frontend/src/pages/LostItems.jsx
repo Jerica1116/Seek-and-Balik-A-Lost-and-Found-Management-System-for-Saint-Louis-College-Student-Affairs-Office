@@ -23,7 +23,20 @@ const AREAS = [
   'HM Laboratory Building',
   'Others'
 ];
-const CATS = ['Personal', 'Accessories', 'Id', 'Electronics', 'Keys', 'Valuables'];
+
+// ─── Categories ─────────────────────────────────────────────────────────────
+// Kept identical to FoundItems.jsx so a lost report and a surrendered item
+// describing the same thing land in the same category — otherwise matching a
+// "Lost" report against a "Found" item means translating between two
+// different vocabularies ('Electronics' vs 'Electronic', 'Id' vs 'ID').
+//
+// NOTE: this replaces the previous list ['Personal', 'Accessories', 'Id',
+// 'Electronics', 'Keys', 'Valuables']. Reports already saved under
+// 'Personal', 'Id', 'Electronics' or 'Valuables' keep their stored value —
+// see LEGACY note on the Category <select> below, which still displays it so
+// editing an old report doesn't silently re-file it as 'Accessories'.
+const CATS = ['Accessories', 'ID', 'Academic Materials', 'Bags & Wallets', 'Clothing', 'Electronic', 'Keys'];
+
 // 'Declined' included so it can be reflected/reset from the Edit modal too.
 const STATUSES = ['Pending', 'Approved', 'Declined', 'Claimed'];
 const MAX_IMAGES = 3;
@@ -31,48 +44,60 @@ const MAX_IMAGES = 3;
 const MAX_LOCATIONS = 5;
 
 // ─── Item Name presets ──────────────────────────────────────────────────────
-// Predefined Item Name choices per Category, used to drive the Item Name
-// dropdown once a Category is selected — same pattern as the Found Items
-// admin page. Keys must match the CATS values above exactly. "Other (please
-// specify)" is always appended in the UI so staff/users can still type
-// something not on the list.
+// Predefined Item Name choices per Category, copied verbatim from
+// FoundItems.jsx so both pages offer the exact same vocabulary. Keys must
+// match the CATS values above exactly. "Other (please specify)" is always
+// appended in the UI so staff/users can still type something not on the list.
 const ITEM_NAME_OPTIONS = {
-  'Personal': [
-    'Umbrella', 'Water Bottle', 'Tumbler', 'Lunch Box', 'Notebook', 'Book',
-    'Wallet', 'Bag', 'Eyeglasses', 'Sunglasses', 'Cap/Hat', 'ID Lace', 'Towel'
-  ],
   'Accessories': [
     'Watch', 'Bracelet', 'Necklace', 'Ring', 'Earrings', 'Hair Clip', 'Hair Tie',
     'Sunglasses', 'Eyeglasses', 'Cap/Hat', 'Keychain', 'ID Lace', 'Brooch/Pin', 'Belt'
   ],
-  'Id': [
+  'ID': [
     'Student ID', 'School ID', "Driver's License", 'Passport', 'Government ID',
     'Company/Employee ID', 'PhilHealth ID', 'UMID', 'ATM/Debit Card', 'Library Card',
     'Other Identification Card'
   ],
-  'Electronics': [
+  'Academic Materials': [
+    'Notebook', 'Binder', 'Folder', 'Envelope', 'Textbook', 'Reference Book', 'Module',
+    'Reviewer', 'Printed Document', 'Assignment', 'Examination Paper', 'Index Card',
+    'Yellow Pad', 'Calculator', 'Ruler', 'Pencil', 'Ballpen', 'Marker/Highlighter',
+    'Eraser', 'Pencil Case', 'Art Materials', 'USB/Flash Drive'
+  ],
+  'Bags & Wallets': [
+    'Backpack', 'School Bag', 'Shoulder Bag', 'Tote Bag', 'Sling Bag', 'Laptop Bag',
+    'Handbag', 'Purse', 'Wallet', 'Coin Purse', 'Pouch', 'Pencil Case', 'Drawstring Bag',
+    'Travel Bag'
+  ],
+  'Clothing': [
+    'T-Shirt', 'Polo Shirt', 'Uniform', 'Jacket', 'Hoodie', 'Sweater', 'Pants', 'Jeans',
+    'Shorts', 'Skirt', 'Dress', 'Socks', 'Shoes', 'Slippers', 'Sneakers', 'Underwear',
+    'Scarf', 'Gloves', 'Raincoat'
+  ],
+  'Electronic': [
     'Mobile Phone', 'Laptop', 'Tablet', 'iPad', 'Smartwatch', 'Digital Camera',
     'Calculator', 'Power Bank', 'Charger', 'Charging Cable', 'Earphones', 'Earbuds',
     'Headphones', 'Bluetooth Speaker', 'USB Flash Drive', 'External Hard Drive', 'Mouse',
-    'Keyboard', 'Adapter'
+    'Keyboard', 'Adapter', 'Power Supply', 'HDMI Cable'
   ],
   'Keys': [
     'House Key', 'Room Key', 'Classroom Key', 'Office Key', 'Cabinet Key', 'Locker Key',
     'Padlock Key', 'Motorcycle Key', 'Car Key', 'Key Set', 'Duplicate Key',
     'Keychain with Keys'
-  ],
-  'Valuables': [
-    'Cash', 'Jewelry', 'Watch', 'Ring', 'Necklace', 'Bracelet', 'Earrings',
-    'Wallet', 'Important Documents', 'Gadget', 'Passbook'
   ]
 };
+
+// The category a brand-new report starts on — first entry of CATS.
+const DEFAULT_CATEGORY = CATS[0];
 
 // Marker value used by the Item Name <select> to represent "the user wants
 // to type a custom name that isn't on the predefined list for this Category".
 const OTHER_ITEM_NAME = '__other__';
 
 /** True when `title` is non-empty and not one of the predefined choices for
- * `category` — i.e. the Item Name field should show as free-text/custom. */
+ * `category` — i.e. the Item Name field should show as free-text/custom.
+ * Also covers reports saved under a category that no longer exists, since
+ * ITEM_NAME_OPTIONS has no entry for it. */
 function isCustomItemName(title, category) {
   if (!title) return false;
   const options = ITEM_NAME_OPTIONS[category] || [];
@@ -87,7 +112,7 @@ const statusColor = (s) =>
 
 const EMPTY = {
   title: '',
-  category: 'Personal',
+  category: DEFAULT_CATEGORY,
   poster_first_name: '',
   poster_last_name: '',
   location: [],
@@ -239,7 +264,8 @@ const ItemModal = ({ item, onSave, onClose }) => {
 
   // Whether the Item Name field is currently in "custom text" mode (staff
   // picked "Other (please specify)", or the item's saved title isn't one of
-  // the predefined choices for its Category — e.g. legacy data).
+  // the predefined choices for its Category — e.g. legacy data, including
+  // reports filed under one of the retired categories).
   const [itemNameOther, setItemNameOther] = useState(() =>
     isCustomItemName(normalizeForm(item).title, normalizeForm(item).category)
   );
@@ -406,6 +432,16 @@ const ItemModal = ({ item, onSave, onClose }) => {
   const itemNamePresets = ITEM_NAME_OPTIONS[form.category] || [];
   const locationLimitReached = selectedLocations.length >= MAX_LOCATIONS;
 
+  // LEGACY CATEGORY — a report saved under one of the retired categories
+  // ('Personal', 'Id', 'Electronics', 'Valuables') has a value that isn't in
+  // CATS anymore. Without an <option> for it the select would render blank
+  // and the first save would silently re-file the report under whatever the
+  // user happened to leave selected. Surfacing it as a disabled-looking
+  // extra option keeps the original value visible until someone
+  // deliberately picks a current category.
+  const legacyCategory =
+    form.category && !CATS.includes(form.category) ? form.category : null;
+
   return (
     <div
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm p-4"
@@ -446,13 +482,24 @@ const ItemModal = ({ item, onSave, onClose }) => {
                 <label className={labelClass}>Category</label>
                 <select
                   className={inputClass}
-                  value={form.category || "Personal"}
+                  value={form.category || DEFAULT_CATEGORY}
                   onChange={(e) => setCategory(e.target.value)}
                 >
+                  {legacyCategory && (
+                    <option value={legacyCategory}>
+                      {legacyCategory} (old category)
+                    </option>
+                  )}
                   {CATS.map((c) => (
                     <option key={c}>{c}</option>
                   ))}
                 </select>
+                {legacyCategory && (
+                  <p className="mt-1 text-xs font-medium text-amber-600">
+                    This report uses a category that's no longer offered. Pick a current one
+                    to re-file it.
+                  </p>
+                )}
               </div>
 
               <div>

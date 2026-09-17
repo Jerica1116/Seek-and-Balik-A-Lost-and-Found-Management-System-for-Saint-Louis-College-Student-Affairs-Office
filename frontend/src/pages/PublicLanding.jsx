@@ -306,24 +306,43 @@ const PublicBoard = ({ onOpenLogin }) => {
   }
 
   // Items of the currently selected type (Lost/Surrendered) that are
-  // actually visible on the public board (status Approved). Category
-  // filter options are derived from this set — before the category
-  // filter itself is applied — so the dropdown only ever offers
-  // categories that have at least one visible item under the current
-  // Lost/Surrendered tab, and never shows a category from the "other"
-  // type that wouldn't match anything here anyway.
-  const typeApprovedItems = filteredItems.filter((item) => item.status === 'Approved');
+  // actually visible on the public board. This EXCLUDES claimed and
+  // archived items explicitly, rather than relying solely on a strict
+  // `status === 'Approved'` equality check — so a claimed item never
+  // lingers here even if the backend returns the status with different
+  // casing/whitespace (e.g. "claimed", " Claimed ") or a status other
+  // than exactly "Approved" for some other reason. Category filter
+  // options are derived from this set — before the category filter
+  // itself is applied — so the dropdown only ever offers categories
+  // that have at least one visible item under the current Lost/
+  // Surrendered tab, and never shows a category from the "other" type
+  // that wouldn't match anything here anyway.
+  const typeApprovedItems = filteredItems.filter((item) => {
+    const status = item.status?.trim().toUpperCase();
+    return status === 'APPROVED';
+  });
 
+  // De-duped by a case-insensitive key so "Electronics" and "electronics"
+  // (or stray whitespace) don't show up as two separate, seemingly
+  // identical entries once toTitleCase renders them.
   const categoryOptions = Array.from(
-    new Set(
-      typeApprovedItems
-        .map((item) => item.category)
-        .filter(Boolean)
-    )
+    typeApprovedItems
+      .map((item) => item.category)
+      .filter(Boolean)
+      .reduce((map, category) => {
+        const key = category.trim().toLowerCase();
+        if (!map.has(key)) map.set(key, category);
+        return map;
+      }, new Map())
+      .values()
   ).sort((a, b) => a.localeCompare(b));
 
   const approvedItems = typeApprovedItems
-    .filter((item) => categoryFilter === 'All' || item.category === categoryFilter)
+    .filter(
+      (item) =>
+        categoryFilter === 'All' ||
+        item.category?.trim().toLowerCase() === categoryFilter.trim().toLowerCase()
+    )
     .sort((a, b) => (b.id || 0) - (a.id || 0));
 
   const ITEMS_PER_PAGE = 10;
@@ -409,44 +428,48 @@ const PublicBoard = ({ onOpenLogin }) => {
 
             {activeView === "items" ? (
               <div className="w-full lg:w-auto lg:ml-auto flex flex-col sm:flex-row sm:items-center gap-3 sm:gap-4 sm:flex-wrap">
-                {/* ACTION BUTTONS WRAPPER */}
-                <div className="w-full sm:w-auto grid grid-cols-2 gap-3 sm:flex sm:items-center sm:gap-4">
+                {/* ACTION BUTTONS WRAPPER — icon-only round buttons, same
+                    style as the profile icon button above. Tooltips
+                    (title) carry the label instead of visible text. */}
+                <div className="flex items-center gap-3">
                   {/* REPORT BUTTON */}
                   <button
                     onClick={requireAuth(() => setShowReport(true))}
-                    title={!isLoggedIn ? "Log in or register to report an item" : undefined}
-                    className={`w-full col-span-2 sm:w-auto sm:col-span-1 bg-[#2D366D] text-white px-4 sm:px-6 py-3 sm:py-2.5 rounded-2xl sm:rounded-full font-black tracking-wide sm:tracking-widest text-xs hover:shadow-lg transition-all shadow-md font-sans whitespace-nowrap flex items-center justify-center gap-2 ${!isLoggedIn ? "opacity-60" : ""}`}
+                    title={!isLoggedIn ? "Log in or register to report an item" : "Report a Lost Item"}
+                    aria-label="Report a Lost Item"
+                    className={`shrink-0 flex items-center justify-center h-10 w-10 rounded-full bg-[#2D366D] text-white shadow-md hover:shadow-lg transition-all ${!isLoggedIn ? "opacity-60" : ""}`}
                   >
-                    <FaPlusCircle size={14} className="text-white" />
-                    Report a Lost Item
+                    <FaPlusCircle size={16} />
                   </button>
 
+                  {/* HELP CENTER BUTTON */}
                   <button
                     onClick={() => window.location.href = "/help"}
-                    className="w-full sm:w-auto bg-white border border-slate-300 text-slate-700 px-4 sm:px-6 py-3 sm:py-2.5 rounded-2xl sm:rounded-full font-black tracking-wide sm:tracking-widest text-xs hover:shadow-lg transition-all shadow-md font-sans whitespace-nowrap flex items-center justify-center gap-2"
-                    >
-                    <FaQuestionCircle size={14} />
-                       Help Center
-                    </button>
+                    title="Help Center"
+                    aria-label="Help Center"
+                    className="shrink-0 flex items-center justify-center h-10 w-10 rounded-full bg-white border border-slate-300 text-slate-700 shadow-sm hover:shadow-md transition-all"
+                  >
+                    <FaQuestionCircle size={16} />
+                  </button>
 
                   {/* TRACK BUTTON */}
                   <button
                     onClick={requireAuth(() => setShowTrackModal(true))}
-                    title={!isLoggedIn ? "Log in or register to track an item" : undefined}
-                    className={`w-full sm:w-auto bg-white border border-slate-300 text-slate-700 px-4 sm:px-6 py-3 sm:py-2.5 rounded-2xl sm:rounded-full font-black tracking-wide sm:tracking-widest text-xs hover:shadow-lg transition-all shadow-md font-sans whitespace-nowrap flex items-center justify-center gap-2 ${!isLoggedIn ? "opacity-60" : ""}`}
+                    title={!isLoggedIn ? "Log in or register to track an item" : "Track Item"}
+                    aria-label="Track Item"
+                    className={`shrink-0 flex items-center justify-center h-10 w-10 rounded-full bg-white border border-slate-300 text-slate-700 shadow-sm hover:shadow-md transition-all ${!isLoggedIn ? "opacity-60" : ""}`}
                   >
-                    <FaSearch size={14} className="text-slate-700" />
-                    Track Item
+                    <FaSearch size={16} />
                   </button>
 
                   {/* LEADERBOARD BUTTON */}
                   <button
                     onClick={requireAuth(() => setActiveView("leaderboard"))}
-                    title={!isLoggedIn ? "Log in or register to view leaderboards" : undefined}
-                    className={`w-full sm:w-auto bg-white border border-slate-300 text-slate-700 px-4 sm:px-6 py-3 sm:py-2.5 rounded-2xl sm:rounded-full font-black tracking-wide sm:tracking-widest text-xs hover:shadow-lg transition-all shadow-md font-sans whitespace-nowrap flex items-center justify-center gap-2 ${!isLoggedIn ? "opacity-60" : ""}`}
+                    title={!isLoggedIn ? "Log in or register to view leaderboards" : "Leaderboards"}
+                    aria-label="Leaderboards"
+                    className={`shrink-0 flex items-center justify-center h-10 w-10 rounded-full bg-white border border-slate-300 text-slate-700 shadow-sm hover:shadow-md transition-all ${!isLoggedIn ? "opacity-60" : ""}`}
                   >
-                    <FaTrophy size={14} className="text-slate-700" />
-                    Leaderboards
+                    <FaTrophy size={16} />
                   </button>
                 </div>
 
@@ -531,9 +554,11 @@ const PublicBoard = ({ onOpenLogin }) => {
                       <th className="border border-gray-300 px-4 py-3 font-semibold text-center text-sm">
                         Date Logged
                       </th>
-                      <th className="border border-gray-300 px-4 py-3 font-semibold text-center text-sm w-[180px]">
-                        Action
-                      </th>
+                      {filter === "Surrendered" && (
+                        <th className="border border-gray-300 px-4 py-3 font-semibold text-center text-sm w-[180px]">
+                          Action
+                        </th>
+                      )}
                     </tr>
                   </thead>
 
@@ -546,7 +571,8 @@ const PublicBoard = ({ onOpenLogin }) => {
                         return (
                           <tr
                             key={itemId ?? `row-${index}`}
-                            className={`${
+                            onClick={requireAuth(() => setDetailItem(item))}
+                            className={`cursor-pointer ${
                               index % 2 === 0 ? "bg-white" : "bg-gray-50"
                             } hover:bg-blue-50 transition`}
                           >
@@ -563,22 +589,17 @@ const PublicBoard = ({ onOpenLogin }) => {
                               <div>{item.created_date}</div>
                               <div>{item.created_time}</div>
                             </td>
-                            <td className="border border-gray-300 px-4 py-3 w-[180px]">
-                              <div className="flex justify-center items-center gap-2">
-                                {/* VIEW ICON BUTTON */}
-                                <button
-                                  onClick={requireAuth(() => setDetailItem(item))}
-                                  title="View Details"
-                                  className="bg-[#0B6C9C] text-white px-3 py-1.5 rounded hover:bg-[#09597F] transition flex items-center justify-center gap-1.5 text-xs font-semibold"
-                                >
-                                  <FaEye size={13} />
-                                  View
-                                </button>
-
-                                {/* CLAIM ICON BUTTON */}
-                                {filter === "Surrendered" && (
+                            {filter === "Surrendered" && (
+                              <td className="border border-gray-300 px-4 py-3 w-[180px]">
+                                <div className="flex justify-center items-center gap-2">
+                                  {/* CLAIM ICON BUTTON — stop the row's own
+                                      onClick (view details) from firing when
+                                      this is clicked. */}
                                   <button
-                                    onClick={requireAuth(() => setClaimItem(item))}
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      requireAuth(() => setClaimItem(item))();
+                                    }}
                                     disabled={claimed}
                                     title={claimed ? "You have already requested to claim this item" : "Claim Item"}
                                     className={`px-3 py-1.5 rounded transition flex items-center justify-center gap-1.5 text-xs font-semibold ${
@@ -590,15 +611,15 @@ const PublicBoard = ({ onOpenLogin }) => {
                                     <FaHandHolding size={13} />
                                     {claimed ? "Claimed" : "Claim"}
                                   </button>
-                                )}
-                              </div>
-                            </td>
+                                </div>
+                              </td>
+                            )}
                           </tr>
                         );
                       })
                     ) : (
                       <tr>
-                        <td colSpan={5} className="bg-white text-center py-40">
+                        <td colSpan={filter === "Surrendered" ? 5 : 4} className="bg-white text-center py-40">
                           <div className="flex flex-col items-center justify-center text-slate-300 gap-2">
                             <span className="text-5xl opacity-10 font-black tracking-tighter">
                               EMPTY
@@ -624,7 +645,8 @@ const PublicBoard = ({ onOpenLogin }) => {
                     return (
                       <div
                         key={itemId ?? `card-${index}`}
-                        className="bg-white border border-slate-200 rounded-lg shadow-sm p-4"
+                        onClick={requireAuth(() => setDetailItem(item))}
+                        className="bg-white border border-slate-200 rounded-lg shadow-sm p-4 cursor-pointer"
                       >
                         <div className="flex items-start justify-between gap-3">
                           <div>
@@ -657,18 +679,13 @@ const PublicBoard = ({ onOpenLogin }) => {
                           </div>
                         </div>
 
-                        <div className="mt-4 flex gap-2">
-                          <button
-                            onClick={requireAuth(() => setDetailItem(item))}
-                            className="flex-1 bg-[#0B6C9C] text-white py-2 rounded font-semibold text-xs flex items-center justify-center gap-2"
-                          >
-                            <FaEye size={14} />
-                            View
-                          </button>
-
-                          {filter === "Surrendered" && (
+                        {filter === "Surrendered" && (
+                          <div className="mt-4 flex gap-2">
                             <button
-                              onClick={requireAuth(() => setClaimItem(item))}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                requireAuth(() => setClaimItem(item))();
+                              }}
                               disabled={claimed}
                               title={claimed ? "You have already requested to claim this item" : undefined}
                               className={`flex-1 py-2 rounded font-semibold text-xs flex items-center justify-center gap-2 ${
@@ -680,8 +697,8 @@ const PublicBoard = ({ onOpenLogin }) => {
                               <FaHandHolding size={14} />
                               {claimed ? "Claimed" : "Claim"}
                             </button>
-                          )}
-                        </div>
+                          </div>
+                        )}
                       </div>
                     );
                   })

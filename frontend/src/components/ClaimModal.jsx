@@ -326,11 +326,12 @@ const ClaimModal = ({
   // Shows the "review before you submit" modal. This is the ONE place
   // actual submission happens, for BOTH paths (mismatched/pending-
   // review and matched/verified-with-schedule). Reached from the main
-  // "Review & Submit" button once validateForm() passes — for the
-  // matched path, that means the claimant has already picked a
-  // date/time in the Schedule section above; validateForm() requires
-  // it before this can open. The actual API call only happens once the
-  // claimant explicitly confirms from THIS modal via
+  // "Review & Submit" button once validateForm() passes — a claimant
+  // now always has to have already picked a date/time in the Schedule
+  // section above, regardless of whether their answers matched, since
+  // that section is shown unconditionally once every question is
+  // answered (see the render section below). The actual API call only
+  // happens once the claimant explicitly confirms from THIS modal via
   // confirmAndSubmitClaim.
   //
   // NOTE: there used to be a separate "Confirm Your Schedule" modal
@@ -397,19 +398,21 @@ const ClaimModal = ({
   // NOTHING else identifying — no correct-answer text should ever come
   // back in this response.
   //
-  // NOTE: this status is now ADVISORY ONLY. It decides whether the
-  // claimant sees the "pick a meeting slot" step (matched) or goes
-  // straight to "submit for moderator review" (mismatched/unverified/
-  // still checking) — it never blocks the Submit button itself. See
-  // handleSubmit below.
+  // NOTE: this status is now PURELY INFORMATIONAL for staff (via
+  // needs_manual_review sent at submission time) — it no longer
+  // changes what the claimant sees or does in this form. The Schedule
+  // section is shown and required either way; a mismatch just means
+  // the claim staff sees in ClaimRequests.jsx will be flagged for
+  // manual approval before that claimant-picked meeting is treated as
+  // final. See handleSubmit/submitClaim below.
   //
   // UI NOTE: the mismatch state is intentionally NOT surfaced to the
   // claimant anywhere in the form (no banner, no inline warning). This
   // is deliberate — telling someone their answers are wrong would let
   // them keep guessing until they land on the recorded answer. The
-  // claimant only ever sees the neutral "submit for review" framing;
-  // whether that happened because of a mismatch, an unverifiable item,
-  // or a still-settling check is not distinguishable from the UI.
+  // claimant only ever sees the same neutral scheduling flow either
+  // way; whether a mismatch happened is not distinguishable from the
+  // UI.
   // ==========================================================
 
   const [verificationStatus, setVerificationStatus] = useState("idle");
@@ -772,13 +775,13 @@ const ClaimModal = ({
   // Fires whenever the answers change and every question is filled in.
   // Only actually calls the backend for item-specific questions — there
   // is no recorded correct answer for the generic category fallback
-  // questions, so those are treated as automatically 'correct' (i.e.
-  // the normal schedule-a-meeting path), matching how staff already
-  // treat them as "not auto-checked" in ClaimRequests.jsx.
+  // questions, so those are treated as automatically 'correct'.
   //
-  // Purely advisory: this only changes which path Submit takes
-  // (schedule-a-meeting vs. submit-for-review). It never blocks
-  // submission — see handleSubmit, which no longer waits on this.
+  // Purely informational for staff now (via needs_manual_review sent
+  // at submission time, see submitClaim) — it no longer changes
+  // anything the claimant sees or does in this form. The Schedule
+  // section is shown and required on both the matched and mismatched
+  // paths; see the render section below.
   // ==========================================================
 
   useEffect(() => {
@@ -789,8 +792,7 @@ const ClaimModal = ({
     }
 
     if (!usingCustomQuestions || !item?.id) {
-      // Nothing admin-recorded to compare against — don't block the
-      // normal schedule flow.
+      // Nothing admin-recorded to compare against.
       setVerificationStatus("correct");
       return;
     }
@@ -837,10 +839,9 @@ const ClaimModal = ({
 
         if (cancelled || requestId !== verificationRequestId.current) return;
 
-        // Fail safe: if we can't confirm correctness, don't silently
-        // let an unverified claim through the normal schedule path —
-        // treat it the same as a mismatch, so it still reaches staff
-        // for manual review rather than blocking submission entirely.
+        // Fail safe: if we can't confirm correctness, flag it for
+        // manual review the same way a mismatch would be, rather than
+        // silently treating an unverifiable answer as correct.
         setVerificationStatus("mismatch");
       }
     }, 600);
@@ -1015,18 +1016,18 @@ const ClaimModal = ({
   // VALIDATE FORM
   //
   // All the checks needed before opening the "Review Your Claim"
-  // modal. Runs for both paths: mismatched/pending-review claims (no
-  // schedule required) and matched/verified claims (schedule
-  // required). Sets validationError and returns false on the first
-  // failing check; clears validationError and returns true once
-  // everything passes.
+  // modal. Runs for both paths: mismatched and matched answers now
+  // both require a picked meeting date/time — see the SCHEDULE check
+  // below — since the Schedule section is shown unconditionally once
+  // every question is answered. Sets validationError and returns
+  // false on the first failing check; clears validationError and
+  // returns true once everything passes.
   //
   // A wrong guess (or a still-in-flight/unavailable live check) never
-  // blocks submission outright — it only changes *which* path the
-  // claimant takes: matched answers require a picked date/time before
-  // Review opens; anything else (mismatched, still checking, or no
-  // verification endpoint available) skips that requirement and goes
-  // straight to "submit for moderator review".
+  // blocks submission outright — it only affects what staff sees on
+  // their end (a flagged mismatch requiring Approve/Decline in
+  // ClaimRequests.jsx) via needs_manual_review, set in submitClaim
+  // below.
   // ------------------------------------------------------
   const validateForm = () => {
 
@@ -1148,16 +1149,13 @@ const ClaimModal = ({
     // ------------------------------------------------------
     // STILL VERIFYING
     //
-    // This is intentionally NOT the same guard that used to block
-    // mismatched answers — a mismatch is a final result and is
-    // allowed straight through to "submit for review" below. This
-    // only pauses on the brief in-flight "checking" state itself, so
-    // a correct answer doesn't get mistaken for a mismatch just
-    // because the debounced check hasn't resolved yet. It always
-    // settles to 'correct' or 'mismatch' within ~600ms + one request
-    // (the effect's catch block falls back to 'mismatch' on any
-    // error), so this never stalls indefinitely — it's just a brief
-    // pause, not a block.
+    // Pauses submission only during the brief in-flight "checking"
+    // state itself, so needs_manual_review (sent in submitClaim) is
+    // computed off a settled result rather than a stale one. It
+    // always settles to 'correct' or 'mismatch' within ~600ms + one
+    // request (the effect's catch block falls back to 'mismatch' on
+    // any error), so this never stalls indefinitely — it's just a
+    // brief pause, not a block.
     // ------------------------------------------------------
 
     if (checkingAnswers) {
@@ -1170,18 +1168,16 @@ const ClaimModal = ({
     // ------------------------------------------------------
     // SCHEDULE
     //
-    // Only required when the answers are confirmed matched, since
-    // that's the only path that shows the schedule picker at all.
-    // Anything else (mismatch, still checking, unverifiable) skips
-    // straight to "submit for review" with no claimant-picked slot —
-    // staff schedules the meeting later from ClaimRequests.jsx once
-    // they've reviewed the answers.
+    // Required on BOTH paths now — matched or mismatched — since the
+    // Schedule section is always shown once every question is
+    // answered (see the render section below). A mismatched claim
+    // still gets flagged for staff review in ClaimRequests.jsx (via
+    // needs_manual_review, set in submitClaim below), but the
+    // claimant's requested slot goes along with it either way, rather
+    // than leaving staff to pick one from scratch.
     // ------------------------------------------------------
 
-    if (
-      answersVerified &&
-      (!form.meeting_date || !form.meeting_time)
-    ) {
+    if (!form.meeting_date || !form.meeting_time) {
 
       setValidationError(
         "Please select a verification date and time."
@@ -1208,12 +1204,11 @@ const ClaimModal = ({
   // happens in submitClaim(), triggered from that modal's "Confirm &
   // Submit".
   //
-  // For the matched/verified path, validateForm() itself requires
-  // form.meeting_date/meeting_time to already be set — so the
-  // claimant naturally has to pick a date and time in the Schedule
-  // section above before this button will let them through. No
-  // separate confirmation step in between picking a time and pressing
-  // this button is needed.
+  // validateForm() itself now requires form.meeting_date/meeting_time
+  // to already be set on both paths — so the claimant naturally has
+  // to pick a date and time in the Schedule section above before this
+  // button will let them through. No separate confirmation step in
+  // between picking a time and pressing this button is needed.
   // ------------------------------------------------------
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -1233,21 +1228,18 @@ const ClaimModal = ({
   // validated (via validateForm(), called from handleSubmit), so this
   // trusts the current form/answers state as-is. This is the ONLY
   // place a claim is actually submitted, reached from the "Review Your
-  // Claim" modal's "Confirm & Submit" button for BOTH paths
-  // (mismatched/pending-review, and matched/verified-with-schedule).
+  // Claim" modal's "Confirm & Submit" button for BOTH paths.
   // On success, shows the inline "submitted" screen within this same
   // modal so the claimant sees a confirmation before choosing to close
   // it themselves via "Done".
   //
-  // meeting_date/meeting_time are sent as `null` (not "") when
-  // answersVerified is false — this is a "pending review" claim with
-  // no claimant-picked slot yet. The backend's ClaimSerializer accepts
-  // a null/absent meeting_date & meeting_time for this to work (its
-  // to_internal_value() also normalizes a stray "" to None as a
-  // belt-and-suspenders measure, but the frontend now sends null
-  // directly so it never depends on that normalization). staff has a
-  // "Schedule Verification Meeting" step in ClaimRequests.jsx to set a
-  // real one once they've reviewed the claim.
+  // meeting_date/meeting_time are now ALWAYS the claimant's picked
+  // slot, regardless of whether their answers matched — validateForm()
+  // already guarantees both are set before this runs. needs_manual_review
+  // still carries the match/mismatch signal separately, so staff in
+  // ClaimRequests.jsx still see a flagged claim requiring an explicit
+  // Approve/Decline — they just see it with the claimant's requested
+  // meeting slot already attached instead of nothing.
   // ==========================================================
 
   const submitClaim = async () => {
@@ -1313,14 +1305,16 @@ const ClaimModal = ({
         claimant_email:
           fullEmail,
 
-        // Null (not "") when the answers didn't verify — this becomes
-        // a pending-review claim with no meeting slot yet. Staff sets
-        // one from ClaimRequests.jsx after reviewing.
+        // Always the claimant's picked slot now — validateForm()
+        // guarantees both are set before submitClaim runs, whether or
+        // not the answers matched. A mismatched-but-scheduled claim
+        // still gets flagged via needs_manual_review below, so staff
+        // know to review it before treating the slot as confirmed.
         meeting_date:
-          answersVerified ? form.meeting_date : null,
+          form.meeting_date,
 
         meeting_time:
-          answersVerified ? form.meeting_time : null,
+          form.meeting_time,
 
         // NOTE: included as an empty string in case the backend Claim
         // model requires "meeting_location" with no default — if so,
@@ -1371,10 +1365,13 @@ const ClaimModal = ({
           trimmedOtherDescription,
 
 
-        // NOTE: same caveat as above — purely informational for staff,
-        // safe to ignore server-side if unsupported. proof_description
-        // and the individual answer_N fields already carry everything
-        // needed for a manual review either way.
+        // This is now the ONLY signal that distinguishes a
+        // matched from a mismatched submission — both send a real
+        // meeting_date/meeting_time. ClaimRequests.jsx's
+        // isPendingReview() treats needs_manual_review as requiring
+        // staff to explicitly Approve/Decline before the claimant's
+        // picked slot is treated as final, even though the slot is
+        // already attached to the claim.
         needs_manual_review:
           !answersVerified,
 
@@ -1390,11 +1387,12 @@ const ClaimModal = ({
       // Claim button for this item immediately — don't wait for the
       // next background refetch, and don't gate this on the "Done"
       // button, since the claimant may close the modal another way.
+      // Always passes the real slot now, since one is always picked.
       if (onSuccess) {
         onSuccess(
           item.id,
-          answersVerified ? form.meeting_date : null,
-          answersVerified ? form.meeting_time : null
+          form.meeting_date,
+          form.meeting_time
         );
       }
 
@@ -1402,14 +1400,16 @@ const ClaimModal = ({
       // claimant can't reopen this same flow again — the backend
       // treats any existing claim for this item/claimant as a
       // permanent duplicate block (see checkExistingClaim above), so
-      // this lock is not time-limited.
+      // this lock is not time-limited. A meeting slot is always
+      // attached now, so this always reflects the "scheduled" case —
+      // a mismatch is still flagged for staff internally via
+      // needs_manual_review, but the claimant sees their meeting
+      // details either way.
       setSubmitted(true);
       setClaimLocked(true);
-      setExistingClaimScheduled(answersVerified);
+      setExistingClaimScheduled(true);
       setClaimLockMessage(
-        answersVerified
-          ? `You've already submitted a claim for this item, and a verification meeting is scheduled on ${form.meeting_date} (${form.meeting_time}).`
-          : "You've already submitted your ownership verification answers for this item. Your claim is pending moderator review."
+        `You've already submitted a claim for this item, and a verification meeting is scheduled on ${form.meeting_date} (${form.meeting_time}).`
       );
 
     } catch (err) {
@@ -1547,6 +1547,13 @@ const ClaimModal = ({
                   <p className="mt-3 text-[11px] font-medium text-slate-400 leading-relaxed">
                     Please arrive on time with a valid school ID. You'll be notified once your claim is approved.
                   </p>
+
+                  {!answersVerified && (
+                    <p className="mt-3 text-[11px] font-semibold text-amber-600 leading-relaxed">
+                      Your answers will still be checked by a moderator before this meeting is
+                      confirmed — you may be contacted if anything needs to be clarified.
+                    </p>
+                  )}
 
                   <p className="mt-3 text-[11px] font-semibold text-[#0B6FA4] leading-relaxed">
                     You won't be able to submit another claim for this item until this meeting time has passed.
@@ -1960,11 +1967,9 @@ const ClaimModal = ({
                       telling the claimant their answers didn't match
                       would let them keep guessing toward the recorded
                       answer by trial and error. The form stays neutral
-                      either way; the only visible difference for a
-                      mismatch is that submission routes to "submit for
-                      review" instead of a scheduling step, which reads
-                      the same as any other case that needs manual
-                      review. */}
+                      either way; the Schedule section below appears
+                      the same regardless of match/mismatch, so nothing
+                      in the visible flow tips the claimant off. */}
                   {allQuestionsAnswered && checkingAnswers && (
                     <p className="mt-4 flex items-center gap-2 text-[11px] font-semibold text-slate-400">
                       <span className="h-3 w-3 animate-spin rounded-full border-2 border-slate-300 border-t-[#0B648D]" />
@@ -1980,22 +1985,26 @@ const ClaimModal = ({
 
                 {/* =================================================
                     SCHEDULE
-                    Only shown once every ownership question is
-                    answered AND those answers verified correctly. A
-                    mismatch (or a still-in-flight check) skips this
-                    section entirely — the claimant proceeds straight to
-                    a "submit for review" confirmation instead.
+                    Shown once every ownership question is answered —
+                    regardless of whether those answers verified
+                    correctly. A mismatch no longer skips this section:
+                    the claimant always picks a meeting date/time and
+                    submits, the same as a matched claimant would. The
+                    only difference happens on staff's side afterward —
+                    a mismatched submission is flagged for manual
+                    Approve/Decline in ClaimRequests.jsx via
+                    needs_manual_review (see submitClaim), rather than
+                    the claimant being blocked from scheduling at all.
 
                     Picking a time here just fills form.meeting_time —
-                    it does NOT open any confirmation popup anymore.
-                    The claimant then presses the single "Review &
-                    Submit" button below to move on; validateForm()
-                    requires both meeting_date and meeting_time to be
-                    set on this path before it'll let them through to
-                    the Review modal.
+                    it does NOT open any confirmation popup. The
+                    claimant then presses the single "Review & Submit"
+                    button below to move on; validateForm() requires
+                    both meeting_date and meeting_time to be set before
+                    it'll let them through to the Review modal.
                 ================================================= */}
 
-                {allQuestionsAnswered && answersVerified && (
+                {allQuestionsAnswered && (
 
                   <div className="space-y-1.5">
 
@@ -2119,14 +2128,12 @@ const ClaimModal = ({
                 {/* =================================================
                     BUTTONS
                     NOTE: Submit IS disabled while checkingAnswers — but
-                    only to avoid the brief race where a correct answer
-                    hasn't finished being confirmed yet and would
-                    otherwise get treated as unverified (skipping the
-                    schedule step it should show). This is a short,
-                    self-resolving pause, not the same thing as blocking
-                    on a mismatch — a confirmed mismatch is NOT in this
-                    disabled list and always pushes straight through to
-                    "submit for review".
+                    only to avoid the brief race where the mismatch
+                    signal sent as needs_manual_review hasn't finished
+                    settling yet. This is a short, self-resolving pause;
+                    it never blocks on a confirmed mismatch itself —
+                    once verificationStatus settles either way, Submit
+                    is available.
                 ================================================= */}
                 <div className="flex gap-3 pt-2">
 
@@ -2175,13 +2182,13 @@ const ClaimModal = ({
           CONFIRMATION MODAL — "Review Your Claim"
           The single place the claim is actually submitted, for BOTH
           paths. Reached from the main form's "Review & Submit" button
-          once validateForm() passes — for the matched/verified path,
-          that means a date/time was already picked in the Schedule
-          section above. Lets the claimant review everything they've
-          entered — one last chance to catch a typo in a free-text
-          answer or the wrong meeting slot — before committing.
-          "Confirm & Submit" triggers confirmAndSubmitClaim(); "Go Back"
-          just closes this and returns to the editable form.
+          once validateForm() passes — a date/time was already picked
+          in the Schedule section above either way. Lets the claimant
+          review everything they've entered — one last chance to catch
+          a typo in a free-text answer or the wrong meeting slot —
+          before committing. "Confirm & Submit" triggers
+          confirmAndSubmitClaim(); "Go Back" just closes this and
+          returns to the editable form.
       ===================================================== */}
 
       {showConfirmModal && (
@@ -2228,39 +2235,35 @@ const ClaimModal = ({
                 </p>
               </div>
 
-              {/* Schedule OR pending-review notice */}
-              {answersVerified ? (
-                <div className="rounded-lg border border-[#B9DCEB] bg-[#F0FAFD] px-4 py-3">
-                  <p className="text-[10px] font-black uppercase tracking-[0.2em] text-[#0B6FA4] mb-1">
-                    Verification Meeting
-                  </p>
-                  <div className="flex items-center justify-between text-[13px] mt-1">
-                    <span className="font-semibold text-slate-500">Date</span>
-                    <span className="font-bold text-slate-800">
-                      {parseDateOnly(form.meeting_date)?.toLocaleDateString("en-US", {
-                        weekday: "short",
-                        month: "short",
-                        day: "numeric",
-                        year: "numeric",
-                      }) || form.meeting_date}
-                    </span>
-                  </div>
-                  <div className="flex items-center justify-between text-[13px] mt-1.5">
-                    <span className="font-semibold text-slate-500">Time</span>
-                    <span className="font-bold text-slate-800">{form.meeting_time}</span>
-                  </div>
+              {/* Schedule — always shown now, since a slot is always
+                  picked and required regardless of match/mismatch. */}
+              <div className="rounded-lg border border-[#B9DCEB] bg-[#F0FAFD] px-4 py-3">
+                <p className="text-[10px] font-black uppercase tracking-[0.2em] text-[#0B6FA4] mb-1">
+                  Verification Meeting
+                </p>
+                <div className="flex items-center justify-between text-[13px] mt-1">
+                  <span className="font-semibold text-slate-500">Date</span>
+                  <span className="font-bold text-slate-800">
+                    {parseDateOnly(form.meeting_date)?.toLocaleDateString("en-US", {
+                      weekday: "short",
+                      month: "short",
+                      day: "numeric",
+                      year: "numeric",
+                    }) || form.meeting_date}
+                  </span>
                 </div>
-              ) : (
-                <div className="rounded-lg border border-amber-300 bg-amber-50 px-4 py-3">
-                  <p className="text-[10px] font-black uppercase tracking-[0.2em] text-amber-700 mb-1">
-                    Pending Moderator Review
-                  </p>
-                  <p className="text-[12px] font-semibold text-slate-600 leading-relaxed">
-                    No meeting has been scheduled yet. Staff will review your answers first and
-                    contact you to set up a verification meeting.
-                  </p>
+                <div className="flex items-center justify-between text-[13px] mt-1.5">
+                  <span className="font-semibold text-slate-500">Time</span>
+                  <span className="font-bold text-slate-800">{form.meeting_time}</span>
                 </div>
-              )}
+
+                {!answersVerified && (
+                  <p className="mt-3 pt-3 border-t border-[#B9DCEB] text-[11px] font-semibold text-amber-600 leading-relaxed">
+                    A moderator will review your answers against our records before this meeting
+                    is confirmed.
+                  </p>
+                )}
+              </div>
 
               {/* Answers */}
               <div className="rounded-lg border border-slate-200 px-4 py-3">
@@ -2293,9 +2296,8 @@ const ClaimModal = ({
               </div>
 
               <p className="text-[11px] font-semibold text-amber-600 leading-relaxed">
-                {answersVerified
-                  ? "Once submitted, you won't be able to edit these answers, and you won't be able to submit another claim for this item until this meeting time has passed."
-                  : "Once submitted, you won't be able to edit these answers. A moderator will review them before any meeting is scheduled."}
+                Once submitted, you won't be able to edit these answers, and you won't be able to
+                submit another claim for this item until this meeting time has passed.
               </p>
 
             </div>

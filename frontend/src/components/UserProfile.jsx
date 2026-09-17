@@ -10,7 +10,9 @@ import {
   AlertTriangle,
   Eye,
   EyeOff,
+  LogOut,
 } from 'lucide-react';
+import { useApp } from '../context/AppContext';
 import { getProfile, updateProfile, changePassword } from '../api/api';
 
 /**
@@ -20,18 +22,31 @@ import { getProfile, updateProfile, changePassword } from '../api/api';
  *   1. Profile details — first/last name, email, and an editable "Alias
  *      Name" (a display name shown instead of the real name wherever the
  *      app surfaces the acting user, e.g. activity logs).
- *   2. Change Password — now inline (expands in place, same pattern as
+ *   2. Change Password — inline (expands in place, same pattern as
  *      "Edit Profile" below) rather than a separate modal component. It
  *      keeps the same two-step flow the old ChangePasswordModal used
  *      (form -> "are you sure?" -> submit), the same validation rules
  *      (12-16 chars, no spaces, match check), and the same
  *      changePassword(currentPassword, newPassword) API call — just
  *      rendered as a card section instead of an overlay.
+ *   3. Log Out — a dedicated section at the bottom of the page so staff
+ *      have a clear, deliberate way to end their session from a page
+ *      they already associate with account-level actions. Two-step
+ *      (button -> "are you sure?") to avoid an accidental single-click
+ *      sign-out, matching the confirm pattern already used for password
+ *      changes on this page.
  *
  * Expects three functions exported from ../api/api:
  *   - getProfile()                          -> GET  current user's profile
  *   - updateProfile(payload)                -> PATCH/PUT profile fields (incl. alias_name)
  *   - changePassword(current, next)         -> POST change password
+ *
+ * ASSUMPTION: AppContext's useApp() exposes a `logout` function (clearing
+ * the stored auth token/session and resetting currentUser). If it doesn't
+ * yet, add one there — see handleLogoutConfirm below for the fallback
+ * this uses in the meantime (clearing currentUser via setCurrentUser and
+ * the common localStorage auth-token keys directly) so this still works
+ * without that change.
  */
 
 const EMPTY_PROFILE = {
@@ -113,6 +128,8 @@ const InitialsAvatar = ({ firstName, lastName }) => {
 };
 
 const UserProfile = () => {
+  const { currentUser, setCurrentUser, logout } = useApp();
+
   const [loading, setLoading] = useState(true);
   const [profile, setProfile] = useState(EMPTY_PROFILE);
   const [editMode, setEditMode] = useState(false);
@@ -129,6 +146,12 @@ const UserProfile = () => {
   const [passwordConfirmStep, setPasswordConfirmStep] = useState(false);
   const [passwordError, setPasswordError] = useState('');
   const [changingPassword, setChangingPassword] = useState(false);
+
+  // Inline log-out section state — same two-step "click -> confirm"
+  // pattern as password change above, kept in its own card at the
+  // bottom of the page.
+  const [logoutConfirmStep, setLogoutConfirmStep] = useState(false);
+  const [loggingOut, setLoggingOut] = useState(false);
 
   useEffect(() => {
     fetchProfile();
@@ -272,6 +295,40 @@ const UserProfile = () => {
     }
   };
 
+  // ── Log out (inline) ──────────────────────────────────────────────
+
+  const openLogoutConfirm = () => setLogoutConfirmStep(true);
+  const cancelLogout = () => setLogoutConfirmStep(false);
+
+  async function handleLogoutConfirm() {
+    if (loggingOut) return;
+    setLoggingOut(true);
+    try {
+      // Prefer a context-provided logout() if AppContext exposes one —
+      // it's the right place for clearing whatever auth token/session
+      // storage the rest of the app relies on. See the ASSUMPTION note
+      // at the top of this file.
+      if (typeof logout === 'function') {
+        await logout();
+      } else {
+        // Fallback: clear the common localStorage auth-token key names
+        // directly and reset the in-memory current user, so signing out
+        // still works even before AppContext grows a dedicated logout().
+        ['token', 'authToken', 'access_token', 'accessToken'].forEach((key) =>
+          localStorage.removeItem(key)
+        );
+        setCurrentUser?.(null);
+      }
+    } catch (error) {
+      console.error('Error logging out:', error);
+      // Even if a server-side logout call fails, still clear local state
+      // and send the user to the login page — staying "logged in" on a
+      // failed logout is worse than a redundant login prompt.
+    } finally {
+      window.location.href = '/login';
+    }
+  }
+
   const displayName = [profile.first_name, profile.last_name].filter(Boolean).join(' ') || 'Your Profile';
 
   return (
@@ -281,12 +338,26 @@ const UserProfile = () => {
       <div className="overflow-hidden rounded-[18px] border border-[#D8E2EF] bg-white shadow-[0_8px_24px_rgba(45,54,109,0.08)]">
         <div className="flex items-center gap-3 bg-gradient-to-r from-[#0B648D] to-[#155F87] px-4 py-4 text-white sm:gap-4 sm:px-6 sm:py-5">
           <InitialsAvatar firstName={profile.first_name} lastName={profile.last_name} />
-          <div className="min-w-0">
+          <div className="min-w-0 flex-1">
             <h3 className="truncate text-base font-bold sm:text-lg">{displayName}</h3>
             <p className="mt-0.5 truncate text-xs text-white/90 sm:text-sm">
               {profile.alias_name ? `Also known as "${profile.alias_name}"` : 'No alias set yet'}
             </p>
           </div>
+
+          {/* Quick logout access from the header too, for a one-click
+              path once staff already trust the confirm step below —
+              routes to the same confirm flow rather than logging out
+              immediately. */}
+          <button
+            type="button"
+            onClick={openLogoutConfirm}
+            title="Log Out"
+            className="inline-flex shrink-0 items-center justify-center gap-1.5 rounded-full bg-white/15 px-3 py-2 text-xs font-black uppercase tracking-wide text-white transition hover:bg-white/25"
+          >
+            <LogOut size={14} />
+            <span className="hidden sm:inline">Log Out</span>
+          </button>
         </div>
       </div>
 
@@ -498,6 +569,63 @@ const UserProfile = () => {
                 </div>
               </form>
             )}
+          </div>
+        )}
+      </div>
+
+      {/* Log out — dedicated section, two-step confirm like Password
+          above. The header button (top-right of the header card) opens
+          this same confirm step rather than logging out immediately. */}
+      <div className="rounded-[18px] border border-[#D8E2EF] bg-white p-4 shadow-[0_8px_24px_rgba(45,54,109,0.08)] sm:p-6">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <div className="flex items-center gap-2">
+            <LogOut size={18} className="shrink-0 text-red-500" />
+            <div className="min-w-0">
+              <h4 className="text-sm font-black uppercase tracking-[0.12em] text-[#071E3D]">Session</h4>
+              <p className="mt-0.5 text-xs italic text-[#7B8AA6]">
+                Sign out of your account on this device
+              </p>
+            </div>
+          </div>
+
+          {!logoutConfirmStep && (
+            <button
+              type="button"
+              onClick={openLogoutConfirm}
+              className="inline-flex shrink-0 items-center justify-center gap-2 self-start rounded-full border border-red-200 bg-red-50 px-4 py-2 text-xs font-black uppercase tracking-wide text-red-600 shadow-sm transition hover:bg-red-100 active:scale-[0.98] sm:self-auto"
+            >
+              <LogOut size={14} /> Log Out
+            </button>
+          )}
+        </div>
+
+        {logoutConfirmStep && (
+          <div className="mt-5 space-y-4 border-t border-slate-100 pt-5 text-center">
+            <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-red-100 text-red-600">
+              <AlertTriangle size={22} />
+            </div>
+            <h5 className="text-base font-bold text-slate-800">Log out of your account?</h5>
+            <p className="text-xs text-slate-500">
+              You'll need to sign back in to access the dashboard again.
+            </p>
+            <div className="flex flex-col items-center justify-center gap-3 pt-1 sm:flex-row">
+              <button
+                type="button"
+                disabled={loggingOut}
+                onClick={cancelLogout}
+                className="w-full rounded-xl border border-slate-300 py-2.5 text-sm font-semibold text-slate-600 transition-colors hover:bg-slate-50 sm:w-1/2"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={loggingOut}
+                onClick={handleLogoutConfirm}
+                className="w-full rounded-xl bg-red-600 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-red-700 disabled:opacity-50 sm:w-1/2"
+              >
+                {loggingOut ? 'Logging out…' : 'Yes, Log Out'}
+              </button>
+            </div>
           </div>
         )}
       </div>

@@ -11,6 +11,7 @@ import {
   addPointsRecord,
   getUsers,
   createUser,
+  getClaims,
 } from "../api/api";
 import { calculatePoints } from '../utils/PointingSystem';
 import PhotoUpload from '../components/PhotoUpload';
@@ -340,6 +341,12 @@ function parseIdNumberDigits(source) {
 // never have to leave this form to register a first-time finder
 // separately. This never blocks the item submission itself — a hiccup
 // here is logged and surfaced as a warning, not a failure.
+//
+// NOTE: the ItemModal now looks the account up as soon as the 8-digit ID
+// Number is entered (see the finder-lookup effect below), so by the time
+// this runs the account usually either already existed — in which case
+// this is a cheap no-op — or genuinely doesn't exist yet and gets created
+// from the name staff typed.
 async function ensureStudentAccount(payload) {
   const email = payload.id_number; // already has the domain suffix appended
   if (!email) return { warning: '' };
@@ -402,6 +409,28 @@ const ItemModal = ({ item, onSave, onClose }) => {
     isCustomItemName(normalizeForm(item).title, normalizeForm(item).category)
   );
 
+  // ─── Finder lookup by ID Number ───────────────────────────────────────────
+  // The ID Number is the FIRST field in this form, because it identifies
+  // the finder. As soon as it reaches 8 digits we look the account up in
+  // User Management (keyed by <digits>@slc-sflu.edu.ph — the same
+  // convention Users.jsx uses). If an account exists, Found By First/Last
+  // Name are filled from that account and locked read-only, so a
+  // registered finder's name can never be spelled differently from one
+  // item to the next; the account record in User Management stays the
+  // single source of truth. If no account exists, the name fields stay
+  // editable and ensureStudentAccount() creates the account on save, as
+  // before.
+  //
+  // 'idle' | 'loading' | 'found' | 'notfound' | 'error'
+  const [lookupStatus, setLookupStatus] = useState('idle');
+
+  // Tracks whether the name currently in the form was put there by the
+  // lookup (as opposed to typed by staff or loaded from an existing item),
+  // so clearing the ID Number only ever wipes OUR auto-fill.
+  const autoFilledRef = useRef(false);
+
+  const nameLocked = lookupStatus === 'found';
+
   // Load latest Question Bank entries on modal mount
   useEffect(() => {
     setPresetQuestions(getPresetQuestions());
@@ -411,8 +440,71 @@ const ItemModal = ({ item, onSave, onClose }) => {
     const normalized = normalizeForm(item);
     setForm(normalized);
     setItemNameOther(isCustomItemName(normalized.title, normalized.category));
+    autoFilledRef.current = false;
+    setLookupStatus('idle');
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [item]);
+
+  // Debounced account lookup driven purely by the ID Number field.
+  useEffect(() => {
+    const digits = form.id_number || '';
+
+    if (digits.length !== 8) {
+      setLookupStatus('idle');
+      if (autoFilledRef.current) {
+        autoFilledRef.current = false;
+        setForm((prev) => ({ ...prev, poster_first_name: '', poster_last_name: '' }));
+      }
+      return;
+    }
+
+    let cancelled = false;
+    setLookupStatus('loading');
+
+    const timer = setTimeout(async () => {
+      try {
+        const users = await getUsers();
+        if (cancelled) return;
+
+        const email = `${digits}${ID_NUMBER_DOMAIN}`.toLowerCase();
+        const match = (Array.isArray(users) ? users : []).find(
+          (u) => (u.email || '').toLowerCase() === email
+        );
+
+        if (match) {
+          autoFilledRef.current = true;
+          setForm((prev) =>
+            prev.id_number === digits
+              ? {
+                  ...prev,
+                  poster_first_name: match.first_name || '',
+                  poster_last_name: match.last_name || '',
+                }
+              : prev
+          );
+          setLookupStatus('found');
+        } else {
+          if (autoFilledRef.current) {
+            autoFilledRef.current = false;
+            setForm((prev) => ({ ...prev, poster_first_name: '', poster_last_name: '' }));
+          }
+          setLookupStatus('notfound');
+        }
+      } catch (err) {
+        if (cancelled) return;
+        // Never trap staff behind read-only fields we can't fill — fall
+        // back to manual entry when the lookup itself fails.
+        console.error('Finder lookup failed:', err.response?.data || err.message);
+        setLookupStatus('error');
+      }
+    }, 300);
+
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [form.id_number]);
 
   const set = (key, value) => {
     setForm((prev) => ({
@@ -525,11 +617,18 @@ const ItemModal = ({ item, onSave, onClose }) => {
     // `if (...) return;` with no feedback at all, so clicking "Add Item"
     // with e.g. no Area Found selected did nothing visible — no error,
     // no save, no clue why.
+    //
+    // Checked in the same order the fields now appear in the form, so the
+    // alert always points at the topmost unfinished field.
     // ------------------------------------------------------------------
     const hasLocation = Array.isArray(form.location) && form.location.length > 0;
 
-    if (!form.title?.trim()) {
-      window.alert("Please select or enter the Item Name.");
+    if (!/^\d{8}$/.test(form.id_number || "")) {
+      window.alert("Please enter a valid 8-digit ID Number.");
+      return;
+    }
+    if (lookupStatus === 'loading') {
+      window.alert("Still checking this ID Number — please wait a moment and try again.");
       return;
     }
     if (!form.poster_first_name?.trim()) {
@@ -540,20 +639,20 @@ const ItemModal = ({ item, onSave, onClose }) => {
       window.alert("Please enter the Last Name of who found the item.");
       return;
     }
-    if (!/^\d{8}$/.test(form.id_number || "")) {
-      window.alert("Please enter a valid 8-digit ID Number.");
-      return;
-    }
-    if (!form.created_date?.trim()) {
-      window.alert("Please select the Date Found.");
-      return;
-    }
     if (!hasLocation) {
       window.alert("Please select the Area Found.");
       return;
     }
     if (form.location.includes("Others") && !form.other_location?.trim()) {
       window.alert('Please specify the location for "Others".');
+      return;
+    }
+    if (!form.title?.trim()) {
+      window.alert("Please select or enter the Item Name.");
+      return;
+    }
+    if (!form.created_date?.trim()) {
+      window.alert("Please select the Date Found.");
       return;
     }
 
@@ -610,12 +709,16 @@ const ItemModal = ({ item, onSave, onClose }) => {
 
   const inputClass =
     "h-11 w-full rounded-xl border border-slate-300 px-4 text-sm text-slate-700 outline-none placeholder:text-slate-400 focus:border-[#1478a7] disabled:bg-slate-100";
+  const lockedInputClass =
+    "h-11 w-full rounded-xl border border-slate-300 bg-slate-100 px-4 text-sm font-semibold text-slate-500 outline-none cursor-not-allowed";
   const labelClass = "mb-2 block text-xs font-bold uppercase text-slate-700";
   const rangeLabelClass = "mb-1 block text-[10px] font-bold uppercase text-slate-400";
   const today = new Date().toLocaleDateString("en-CA");
   const selectedLocations = Array.isArray(form.location) ? form.location : [];
   const idNumberInvalid = form.id_number && form.id_number.length !== 8;
   const itemNamePresets = ITEM_NAME_OPTIONS[form.category] || [];
+  const lockedTitle =
+    "This name comes from the registered account for this ID Number. To change it, edit the account in User Management.";
 
   return (
     <div
@@ -629,7 +732,7 @@ const ItemModal = ({ item, onSave, onClose }) => {
           <div>
             <h3 className="text-lg font-bold">{isEdit ? "Edit Found Item" : "Add Found Item"}</h3>
             <p className="mt-1 text-sm text-white/90">
-              {isEdit ? "Update found item details" : "Submit details for a found item"}
+              {isEdit ? "Update found item details" : "Start with the finder's ID Number"}
             </p>
           </div>
           <button
@@ -645,12 +748,134 @@ const ItemModal = ({ item, onSave, onClose }) => {
           <div className="mx-auto max-w-3xl space-y-3">
             {!isEdit && (
               <div className="rounded-xl bg-blue-50 p-4 border border-blue-200 text-blue-800 text-xs font-medium">
-                ℹ️ This item will be marked <strong>Approved</strong> and appear immediately on the public board under "Surrendered". If the finder's ID Number isn't already registered, a Student account will be created for them automatically.
+                ℹ️ Enter the finder's ID Number first — if they already have an account, their name fills in automatically. This item will be marked <strong>Approved</strong> and appear immediately on the public board under "Surrendered". If the ID Number isn't registered yet, a Student account will be created for them automatically.
               </div>
             )}
 
-            {/* Category is picked FIRST — the Item Name choices to its right
-                depend on it. */}
+            {/* ── 1. ID Number first: it identifies the finder and drives the
+                   name auto-fill directly below. ───────────────────────── */}
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+              <div>
+                <label className={labelClass}>ID Number *</label>
+                <div className="flex items-center gap-2">
+                  <input
+                    className={`${inputClass} flex-1`}
+                    value={form.id_number || ""}
+                    onChange={(e) => setIdNumber(e.target.value)}
+                    inputMode="numeric"
+                    pattern="\d*"
+                    maxLength={8}
+                    placeholder="8-digit ID"
+                    autoFocus={!isEdit}
+                    required
+                  />
+                  <span className="whitespace-nowrap text-sm font-semibold text-slate-500">
+                    {ID_NUMBER_DOMAIN}
+                  </span>
+                </div>
+
+                {idNumberInvalid && (
+                  <p className="mt-1 text-xs font-medium text-red-500">
+                    ID Number must be exactly 8 digits.
+                  </p>
+                )}
+                {lookupStatus === 'loading' && (
+                  <p className="mt-1 text-xs font-semibold text-slate-400">
+                    Checking this ID Number…
+                  </p>
+                )}
+                {lookupStatus === 'found' && (
+                  <p className="mt-1 text-xs font-semibold text-emerald-700">
+                    ✅ Registered account found — the name below is filled in from it.
+                  </p>
+                )}
+                {lookupStatus === 'notfound' && (
+                  <p className="mt-1 text-xs font-medium text-amber-600">
+                    No account for this ID yet — enter the finder's name below and an account will be created on save.
+                  </p>
+                )}
+                {lookupStatus === 'error' && (
+                  <p className="mt-1 text-xs font-medium text-amber-600">
+                    Couldn't reach User Management — enter the finder's name manually.
+                  </p>
+                )}
+              </div>
+
+              {/* Area Found — single select */}
+              <div>
+                <label className={labelClass}>Area Found *</label>
+                <select
+                  className={inputClass}
+                  value={selectedLocations[0] || ""}
+                  onChange={(e) => setLocation(e.target.value)}
+                  required
+                >
+                  <option value="" disabled>-- Select an area --</option>
+                  {AREAS.map((a) => (
+                    <option key={a} value={a}>{a}</option>
+                  ))}
+                </select>
+
+                {selectedLocations.includes("Others") && (
+                  <input
+                    className={`${inputClass} mt-2`}
+                    value={form.other_location || ""}
+                    onChange={(e) => set("other_location", e.target.value)}
+                    placeholder="Please specify the location"
+                    required
+                  />
+                )}
+              </div>
+            </div>
+
+            {/* ── 2. Found By — auto-filled and read-only when the ID Number
+                   matches a registered account. `readOnly` (not `disabled`)
+                   so the values still submit and still satisfy `required`. */}
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+              <div>
+                <label className={labelClass}>
+                  Found By — First Name *
+                  {nameLocked && (
+                    <span className="ml-2 font-bold normal-case text-emerald-700">🔒 from account</span>
+                  )}
+                </label>
+                <input
+                  className={nameLocked ? lockedInputClass : inputClass}
+                  value={form.poster_first_name || ""}
+                  onChange={(e) => set("poster_first_name", e.target.value)}
+                  placeholder={lookupStatus === 'loading' ? "Checking…" : "First name"}
+                  readOnly={nameLocked}
+                  title={nameLocked ? lockedTitle : undefined}
+                  required
+                />
+              </div>
+              <div>
+                <label className={labelClass}>
+                  Found By — Last Name *
+                  {nameLocked && (
+                    <span className="ml-2 font-bold normal-case text-emerald-700">🔒 from account</span>
+                  )}
+                </label>
+                <input
+                  className={nameLocked ? lockedInputClass : inputClass}
+                  value={form.poster_last_name || ""}
+                  onChange={(e) => set("poster_last_name", e.target.value)}
+                  placeholder={lookupStatus === 'loading' ? "Checking…" : "Last name"}
+                  readOnly={nameLocked}
+                  title={nameLocked ? lockedTitle : undefined}
+                  required
+                />
+              </div>
+            </div>
+
+            {nameLocked && (
+              <p className="text-xs font-medium text-slate-400">
+                Name locked to the registered account for this ID Number. To correct it, update the account in User Management.
+              </p>
+            )}
+
+            {/* ── 3. The item itself. Category is picked before Item Name —
+                   the Item Name choices depend on it. ──────────────────── */}
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
               <div>
                 <label className={labelClass}>Category</label>
@@ -701,87 +926,7 @@ const ItemModal = ({ item, onSave, onClose }) => {
               </div>
             </div>
 
-            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-              <div>
-                <label className={labelClass}>Found By — First Name *</label>
-                <input
-                  className={inputClass}
-                  value={form.poster_first_name || ""}
-                  onChange={(e) => set("poster_first_name", e.target.value)}
-                  placeholder="First name"
-                  required
-                />
-              </div>
-              <div>
-                <label className={labelClass}>Found By — Last Name *</label>
-                <input
-                  className={inputClass}
-                  value={form.poster_last_name || ""}
-                  onChange={(e) => set("poster_last_name", e.target.value)}
-                  placeholder="Last name"
-                  required
-                />
-              </div>
-            </div>
-
-            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-              <div>
-                <label className={labelClass}>ID Number *</label>
-                <div className="flex items-center gap-2">
-                  <input
-                    className={`${inputClass} flex-1`}
-                    value={form.id_number || ""}
-                    onChange={(e) => setIdNumber(e.target.value)}
-                    inputMode="numeric"
-                    pattern="\d*"
-                    maxLength={8}
-                    placeholder="8-digit ID"
-                    required
-                  />
-                  <span className="whitespace-nowrap text-sm font-semibold text-slate-500">
-                    {ID_NUMBER_DOMAIN}
-                  </span>
-                </div>
-                {idNumberInvalid && (
-                  <p className="mt-1 text-xs font-medium text-red-500">
-                    ID Number must be exactly 8 digits.
-                  </p>
-                )}
-                {!isEdit && (
-                  <p className="mt-1 text-xs font-medium text-slate-400">
-                    If this ID isn't registered yet, a Student account will be created automatically.
-                  </p>
-                )}
-              </div>
-
-              {/* Area Found — single select */}
-              <div>
-                <label className={labelClass}>Area Found *</label>
-                <select
-                  className={inputClass}
-                  value={selectedLocations[0] || ""}
-                  onChange={(e) => setLocation(e.target.value)}
-                  required
-                >
-                  <option value="" disabled>-- Select an area --</option>
-                  {AREAS.map((a) => (
-                    <option key={a} value={a}>{a}</option>
-                  ))}
-                </select>
-
-                {selectedLocations.includes("Others") && (
-                  <input
-                    className={`${inputClass} mt-2`}
-                    value={form.other_location || ""}
-                    onChange={(e) => set("other_location", e.target.value)}
-                    placeholder="Please specify the location"
-                    required
-                  />
-                )}
-              </div>
-            </div>
-
-            {/* Date Found & Time Found — now settable as a range (From / To) */}
+            {/* Date Found & Time Found — settable as a range (From / To) */}
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
               <div>
                 <label className={labelClass}>Date Found *</label>
@@ -1076,6 +1221,95 @@ const ConfirmModal = ({ message, onConfirm, onClose }) => (
     </div>
   </div>
 );
+
+// ─── Claimant Info Prompt ───────────────────────────────────────────────────
+// Shown when staff clicks "Mark as Claimed" from the Review modal. Unlike
+// the ClaimRequests.jsx flow (where a full Claim record with claimant_name/
+// claimant_contact/claimant_email already exists), a "Mark as Claimed"
+// here has no such record behind it — see handleClaimItem's own comment
+// header. So this collects the claimant's name (required) plus optional
+// contact/email, which get saved onto the item itself, so "who claimed
+// this" is always answerable from the Review modal afterward, not just
+// "when".
+//
+// Best-effort convenience: if a Claim record already exists for this item
+// (e.g. the claimant went through the public claim flow and staff is just
+// finalizing it here rather than through Claim Requests), the fields are
+// pre-filled from the most recent matching claim — see openClaimPrompt in
+// FoundItems below. Staff can still edit anything before confirming.
+const ClaimantInfoModal = ({ item, name, contact, email, prefillLoading, onChange, onConfirm, onClose, saving }) => (
+  <div className="fixed inset-0 z-[200] flex items-center justify-center bg-slate-900/35 p-4 backdrop-blur-sm">
+    <div className="w-full max-w-sm rounded-[24px] bg-white p-6 shadow-2xl">
+      <div className="mb-4">
+        <h5 className="text-lg font-black text-[#144B70]">Mark Item as Claimed</h5>
+        <p className="mt-1 text-xs font-medium text-[#5F6F8C]">
+          Enter who is claiming <span className="font-bold">{toTitleCase(item?.title)}</span>, so it's
+          on record for this item.
+        </p>
+      </div>
+
+      {prefillLoading && (
+        <p className="mb-3 text-[11px] font-semibold text-slate-400">
+          Checking for an existing claim on this item...
+        </p>
+      )}
+
+      <div className="space-y-3">
+        <div>
+          <label className="mb-1 block text-xs font-bold uppercase text-slate-700">Claimant Name *</label>
+          <input
+            autoFocus
+            className="h-11 w-full rounded-xl border border-slate-300 px-4 text-sm text-slate-700 outline-none placeholder:text-slate-400 focus:border-[#1478a7]"
+            value={name}
+            onChange={(e) => onChange('name', e.target.value)}
+            placeholder="Full name"
+          />
+        </div>
+        <div>
+          <label className="mb-1 block text-xs font-bold uppercase text-slate-700">Contact Number</label>
+          <input
+            className="h-11 w-full rounded-xl border border-slate-300 px-4 text-sm text-slate-700 outline-none placeholder:text-slate-400 focus:border-[#1478a7]"
+            value={contact}
+            onChange={(e) => onChange('contact', e.target.value)}
+            placeholder="Optional"
+          />
+        </div>
+        <div>
+          <label className="mb-1 block text-xs font-bold uppercase text-slate-700">Email</label>
+          <input
+            className="h-11 w-full rounded-xl border border-slate-300 px-4 text-sm text-slate-700 outline-none placeholder:text-slate-400 focus:border-[#1478a7]"
+            value={email}
+            onChange={(e) => onChange('email', e.target.value)}
+            placeholder="Optional"
+          />
+        </div>
+      </div>
+
+      <div className="mt-6 space-y-3">
+        <button
+          onClick={onConfirm}
+          disabled={saving}
+          className="flex h-12 w-full items-center justify-center gap-2 rounded-xl bg-[#0B6B8A] text-sm font-black uppercase tracking-wide text-white shadow-md transition hover:bg-[#095A74] active:scale-[0.98] disabled:opacity-60 disabled:cursor-not-allowed"
+        >
+          {saving ? (
+            <div className="h-4 w-4 animate-spin rounded-full border-2 border-white border-t-transparent" />
+          ) : (
+            'Confirm Claimed'
+          )}
+        </button>
+
+        <button
+          onClick={onClose}
+          disabled={saving}
+          className="h-12 w-full rounded-xl border border-[#0B6B8A] bg-white text-sm font-black uppercase tracking-wide text-[#0B6B8A] transition hover:bg-[#EAF4FF] disabled:opacity-60 disabled:cursor-not-allowed"
+        >
+          Cancel
+        </button>
+      </div>
+    </div>
+  </div>
+);
+
 // ─── FoundItems Component ──────────────────────────────────────────────────────
 const FoundItems = ({ searchFilter }) => {
   const [search, setSearch] = useState('');
@@ -1090,6 +1324,12 @@ const FoundItems = ({ searchFilter }) => {
   // Archived items are excluded from both tabs.
   const [claimFilter, setClaimFilter] = useState('unclaimed');
   const tableContainerRef = useRef(null);
+
+  // Claimant-info prompt shown from the Review modal's "Mark as Claimed"
+  // button — see ClaimantInfoModal above and openClaimPrompt/
+  // confirmClaimItem below. `null` when not open.
+  const [claimPrompt, setClaimPrompt] = useState(null);
+  const [claimPromptSaving, setClaimPromptSaving] = useState(false);
 
   useEffect(() => {
     fetchItems();
@@ -1330,48 +1570,206 @@ const FoundItems = ({ searchFilter }) => {
     }
   }
 
-  async function handleClaimItem(item) {
+  // ------------------------------------------------------------------
+  // CLAIMANT PROMPT — opened from the Review modal's "Mark as Claimed"
+  // button (instead of calling handleClaimItem directly), so staff always
+  // records WHO claimed the item, not just WHEN. See ClaimantInfoModal
+  // above.
+  //
+  // Best-effort prefill: looks up any existing Claim record for this item
+  // (via getClaims — the same endpoint ClaimRequests.jsx polls) and, if
+  // found, pre-fills the claimant fields from the most recently submitted
+  // matching claim. This covers the case where the claimant already went
+  // through the public claim flow and staff is just finalizing pickup
+  // here — staff can still edit any of the fields before confirming.
+  // Failure to look this up never blocks manual entry.
+  // ------------------------------------------------------------------
+  async function openClaimPrompt(item) {
+    if (item.status === 'Claimed') {
+      window.alert('This item is already claimed.');
+      return;
+    }
+
+    setClaimPrompt({ item, name: '', contact: '', email: '', prefillLoading: true });
+
+    try {
+      const response = await getClaims();
+      const claimsList = Array.isArray(response)
+        ? response
+        : Array.isArray(response?.results)
+        ? response.results
+        : [];
+
+      const matching = claimsList
+        .filter((c) => {
+          const claimItemId = c.item_details?.id ?? c.item?.id ?? c.item_id ?? c.item;
+          return String(claimItemId) === String(item.id);
+        })
+        .sort((a, b) => new Date(b.claim_date) - new Date(a.claim_date))[0];
+
+      setClaimPrompt((prev) =>
+        prev && prev.item.id === item.id
+          ? {
+              ...prev,
+              name: matching?.claimant_name || '',
+              contact: matching?.claimant_contact || '',
+              email: matching?.claimant_email || '',
+              prefillLoading: false,
+            }
+          : prev
+      );
+    } catch (err) {
+      console.error('Failed to look up existing claim for prefill:', err);
+      setClaimPrompt((prev) => (prev && prev.item.id === item.id ? { ...prev, prefillLoading: false } : prev));
+    }
+  }
+
+  const updateClaimPromptField = (field, value) => {
+    setClaimPrompt((prev) => (prev ? { ...prev, [field]: value } : prev));
+  };
+
+  async function confirmClaimPrompt() {
+    if (!claimPrompt) return;
+    if (!claimPrompt.name.trim()) {
+      window.alert('Please enter the name of the person claiming this item.');
+      return;
+    }
+
+    setClaimPromptSaving(true);
+    try {
+      await handleClaimItem(claimPrompt.item, {
+        name: claimPrompt.name.trim(),
+        contact: claimPrompt.contact.trim(),
+        email: claimPrompt.email.trim(),
+      });
+      setClaimPrompt(null);
+    } finally {
+      setClaimPromptSaving(false);
+    }
+  }
+
+  // `claimantInfo` ({ name, contact, email }), when provided, is what
+  // openClaimPrompt/confirmClaimPrompt above collected from staff (or
+  // pre-filled from an existing Claim record) — persisted onto the item
+  // as claimed_by_name/claimed_by_contact/claimed_by_email so the Review
+  // modal can show WHO claimed an item, not just when.
+  //
+  // ASSUMPTION: the backend's item model/serializer accepts and persists
+  // `claimed_by_name`, `claimed_by_contact`, and `claimed_by_email`. If
+  // it doesn't yet, add them there (or swap these field names for
+  // whatever equivalent already exists).
+  async function handleClaimItem(item, claimantInfo = {}) {
     if (item.status === 'Claimed') {
       window.alert('This item is already claimed.');
       return;
     }
 
     try {
+      // ------------------------------------------------------------------
+      // Send the FULL item back with status flipped to 'Claimed', not just
+      // a handful of fields. Previously only title/poster_name/category/
+      // location/created_date/created_time/description/status were sent —
+      // if the backend treats this update as a full replace (PUT-style)
+      // rather than a partial patch, every other field (id_number,
+      // ticket_code, verification questions/answers, images, etc.) could
+      // get silently wiped out, and in some backend configurations an
+      // incomplete/invalid payload can cause the status update itself to
+      // fail — which is why a claimed item could keep showing up on the
+      // public board under Surrendered. Sending everything back guards
+      // against both.
+      // ------------------------------------------------------------------
       const formData = new FormData();
-      formData.append('title', item.title || '');
-      formData.append('poster_name', item.poster_name || '');
-      formData.append('category', item.category || '');
-      formData.append('location', item.location || '');
-      formData.append('created_date', item.created_date || '');
-      formData.append('created_time', item.created_time || '');
-      formData.append('description', item.description || '');
-      formData.append('status', 'Claimed');
+      Object.entries(item).forEach(([key, value]) => {
+        if (key === 'image' || key === 'images' || key === 'file') return; // don't resend file fields
+        if (value === null || value === undefined) return;
+        formData.append(key, value);
+      });
+      formData.set('status', 'Claimed');
+
+      // If the list payload didn't carry id_number (or carried it blank),
+      // don't send the item back without it — a PUT-style update on the
+      // backend would then blank out the finder's ID permanently, and the
+      // points award below would fail outright ("id_number ... required").
+      // Re-fetch the full record and restore it before sending.
+      if (!item.id_number) {
+        try {
+          const full = await getItemById(item.id);
+          const data = Array.isArray(full)
+            ? full[0]
+            : (full?.results ? full.results[0] : full);
+          if (data?.id_number) formData.set('id_number', data.id_number);
+          if (data?.poster_name) formData.set('poster_name', data.poster_name);
+        } catch (err) {
+          console.error('Could not re-fetch item before claim update:', err);
+        }
+      }
+
+      // Record exactly when this item was marked claimed, so the table
+      // can show "Date Claimed" alongside "Date Found". Uses formData.set
+      // (not append) since `item` may already carry a stale claimed_date/
+      // claimed_time from a previous (e.g. re-claimed) record.
+      const claimedNow = new Date();
+      formData.set('claimed_date', claimedNow.toLocaleDateString('en-CA'));
+      formData.set('claimed_time', claimedNow.toTimeString().slice(0, 5));
+
+      // WHO claimed it — see the ASSUMPTION note above this function.
+      formData.set('claimed_by_name', claimantInfo.name || '');
+      formData.set('claimed_by_contact', claimantInfo.contact || '');
+      formData.set('claimed_by_email', claimantInfo.email || '');
 
       await editLostItem(item.id, formData);
 
       logActivity({
         action: 'claimed',
         target_title: item.title,
-        details: `marked "${item.title}" as claimed`,
+        details: claimantInfo.name
+          ? `marked "${item.title}" as claimed by ${claimantInfo.name}`
+          : `marked "${item.title}" as claimed`,
       });
 
       // ------------------------------------------------------------------
       // POINTS SYSTEM — award points to the ORIGINAL FINDER (item.id_number)
       // when their surrendered item is successfully claimed by its rightful
       // owner. Points = category points + the ITEM_CLAIMED action bonus.
-      // Wrapped in its own try/catch so a points-service hiccup never
-      // blocks the claim itself. On failure, the error is surfaced to the
-      // user (in addition to being logged) so it isn't missed silently.
+      //
+      // `item` here comes from the table list, whose serializer may not
+      // include id_number (or may return it blank) — the points endpoint
+      // rejects the request outright in that case ("id_number and reason
+      // are required"). So resolve the finder's ID first: try the item as
+      // given, fall back to re-fetching the full record, and skip the
+      // award (with a visible warning) rather than firing a call we
+      // already know will fail.
       // ------------------------------------------------------------------
       let pointsWarning = '';
       try {
-        await addPointsRecord({
-          id_number: item.id_number,
-          player_name: item.poster_name,
-          reason: 'ITEM_CLAIMED',
-          item_id: item.ticket_code || item.id,
-          points: calculatePoints(item.category, 'ITEM_CLAIMED'),
-        });
+        let finderId = item.id_number;
+        let finderName = item.poster_name;
+
+        if (!finderId) {
+          try {
+            const full = await getItemById(item.id);
+            const data = Array.isArray(full)
+              ? full[0]
+              : (full?.results ? full.results[0] : full);
+            finderId = data?.id_number || '';
+            finderName = data?.poster_name || finderName;
+          } catch (lookupErr) {
+            console.error('Could not re-fetch item for points award:', lookupErr);
+          }
+        }
+
+        if (!finderId) {
+          pointsWarning =
+            '\n\n⚠️ Points were not awarded — this item has no ID Number on record for the finder.';
+        } else {
+          await addPointsRecord({
+            id_number: finderId,
+            player_name: finderName,
+            reason: 'ITEM_CLAIMED',
+            item_id: item.ticket_code || item.id,
+            points: calculatePoints(item.category, 'ITEM_CLAIMED'),
+          });
+        }
       } catch (pointsError) {
         console.error('Failed to award points for claim:', pointsError.response?.data || pointsError.message);
         pointsWarning = '\n\n⚠️ However, points could not be awarded for this claim (see console for details).';
@@ -1539,15 +1937,16 @@ const FoundItems = ({ searchFilter }) => {
 
         {/* Table */}
         <div ref={tableContainerRef} className="flex-1 overflow-auto bg-white">
-          <table className="w-full min-w-[1000px] table-fixed border-collapse">
+          <table className="w-full min-w-[1120px] table-fixed border-collapse">
             <thead className="sticky top-0 z-10">
               <tr>
-                <th className="w-[12%] bg-[#0B6B8A] p-4 border border-gray-300 text-center text-[11px] font-black uppercase text-white">Ticket</th>
-                <th className="w-[15%] bg-[#0B6B8A] p-4 border border-gray-300 text-center text-[11px] font-black uppercase text-white">Item Name</th>
-                <th className="w-[12%] bg-[#0B6B8A] p-4 border border-gray-300 text-center text-[11px] font-black uppercase text-white">Category</th>
-                <th className="w-[16%] bg-[#0B6B8A] p-4 border border-gray-300 text-center text-[11px] font-black uppercase text-white">Found By</th>
-                <th className="w-[16%] bg-[#0B6B8A] p-4 border border-gray-300 text-center text-[11px] font-black uppercase text-white">Area Found</th>
-                <th className="w-[12%] bg-[#0B6B8A] p-4 border border-gray-300 text-center text-[11px] font-black uppercase text-white">Date</th>
+                <th className="w-[10%] bg-[#0B6B8A] p-4 border border-gray-300 text-center text-[11px] font-black uppercase text-white">Ticket</th>
+                <th className="w-[13%] bg-[#0B6B8A] p-4 border border-gray-300 text-center text-[11px] font-black uppercase text-white">Item Name</th>
+                <th className="w-[10%] bg-[#0B6B8A] p-4 border border-gray-300 text-center text-[11px] font-black uppercase text-white">Category</th>
+                <th className="w-[13%] bg-[#0B6B8A] p-4 border border-gray-300 text-center text-[11px] font-black uppercase text-white">Found By</th>
+                <th className="w-[13%] bg-[#0B6B8A] p-4 border border-gray-300 text-center text-[11px] font-black uppercase text-white">Area Found</th>
+                <th className="w-[11%] bg-[#0B6B8A] p-4 border border-gray-300 text-center text-[11px] font-black uppercase text-white">Date Found</th>
+                <th className="w-[11%] bg-[#0B6B8A] p-4 border border-gray-300 text-center text-[11px] font-black uppercase text-white">Date Claimed</th>
                 <th className="w-[9%] bg-[#0B6B8A] p-4 border border-gray-300 text-center text-[11px] font-black uppercase text-white">Status</th>
                 <th className="w-[8%] bg-[#0B6B8A] p-4 border border-gray-300 text-center text-[11px] font-black uppercase text-white">Action</th>
               </tr>
@@ -1565,6 +1964,16 @@ const FoundItems = ({ searchFilter }) => {
                     <td className="border border-gray-300 p-4 text-center align-middle text-slate-700 text-[13px]">
                       <span className="block">{item.created_date ? item.created_date : '-'}</span>
                       <span className="block text-xs text-slate-400">{item.created_time ? item.created_time : ''}</span>
+                    </td>
+                    <td className="border border-gray-300 p-4 text-center align-middle text-slate-700 text-[13px]">
+                      {item.status?.toUpperCase() === 'CLAIMED' && item.claimed_date ? (
+                        <>
+                          <span className="block">{item.claimed_date}</span>
+                          <span className="block text-xs text-slate-400">{item.claimed_time ? item.claimed_time : ''}</span>
+                        </>
+                      ) : (
+                        <span className="text-slate-300">-</span>
+                      )}
                     </td>
                     <td className="border border-gray-300 p-4 text-center align-middle">
                       <span className={`rounded px-3 py-1 text-[10px] font-black uppercase ${statusColor(item.status)}`}>
@@ -1596,7 +2005,7 @@ const FoundItems = ({ searchFilter }) => {
                 ))
               ) : (
                 <tr>
-                  <td colSpan={8} className="bg-white py-24 text-center text-[#7B8AA6] font-bold uppercase">
+                  <td colSpan={9} className="bg-white py-24 text-center text-[#7B8AA6] font-bold uppercase">
                     {claimFilter === 'claimed' ? 'No claimed items found' : 'No found items found'}
                   </td>
                 </tr>
@@ -1723,9 +2132,9 @@ const FoundItems = ({ searchFilter }) => {
 
                 <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                   <div>
-                    <p className="mb-2 block text-xs font-bold uppercase text-slate-700">Item Name</p>
-                    <div className="min-h-11 rounded-xl border border-slate-300 px-4 py-3 text-sm font-bold text-slate-700">
-                      {toTitleCase(selectedItem.title) || '-'}
+                    <p className="mb-2 block text-xs font-bold uppercase text-slate-700">ID Number</p>
+                    <div className="min-h-11 rounded-xl border border-slate-300 px-4 py-3 text-sm text-slate-700">
+                      {selectedItem.id_number || '-'}
                     </div>
                   </div>
 
@@ -1739,9 +2148,9 @@ const FoundItems = ({ searchFilter }) => {
 
                 <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                   <div>
-                    <p className="mb-2 block text-xs font-bold uppercase text-slate-700">ID Number</p>
-                    <div className="min-h-11 rounded-xl border border-slate-300 px-4 py-3 text-sm text-slate-700">
-                      {selectedItem.id_number || '-'}
+                    <p className="mb-2 block text-xs font-bold uppercase text-slate-700">Item Name</p>
+                    <div className="min-h-11 rounded-xl border border-slate-300 px-4 py-3 text-sm font-bold text-slate-700">
+                      {toTitleCase(selectedItem.title) || '-'}
                     </div>
                   </div>
 
@@ -1769,6 +2178,47 @@ const FoundItems = ({ searchFilter }) => {
                     </div>
                   </div>
                 </div>
+
+                {/* ==========================================================
+                    CLAIMED BY — only shown for items whose status is
+                    "Claimed". Surfaces WHO claimed the item alongside the
+                    existing Date Claimed info, using claimed_by_name/
+                    claimed_by_contact/claimed_by_email saved on the item
+                    at claim time (see handleClaimItem's ASSUMPTION note).
+                    Items claimed before this field existed show "Not
+                    recorded" rather than leaving the section out entirely,
+                    so it's clear the data is simply missing, not that
+                    nobody claimed it.
+                ========================================================== */}
+                {selectedItem.status?.toUpperCase() === 'CLAIMED' && (
+                  <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                    <div>
+                      <p className="mb-2 block text-xs font-bold uppercase text-slate-700">Claimed By</p>
+                      <div className="min-h-11 rounded-xl border border-purple-200 bg-purple-50 px-4 py-3 text-sm font-bold text-purple-800">
+                        {toTitleCase(selectedItem.claimed_by_name) || 'Not recorded'}
+                      </div>
+                    </div>
+
+                    <div>
+                      <p className="mb-2 block text-xs font-bold uppercase text-slate-700">Claimant Contact</p>
+                      <div className="min-h-11 rounded-xl border border-purple-200 bg-purple-50 px-4 py-3 text-sm text-purple-800">
+                        {selectedItem.claimed_by_contact || selectedItem.claimed_by_email || 'Not recorded'}
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {selectedItem.status?.toUpperCase() === 'CLAIMED' && selectedItem.claimed_date && (
+                  <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                    <div>
+                      <p className="mb-2 block text-xs font-bold uppercase text-slate-700">Date Claimed</p>
+                      <div className="min-h-11 rounded-xl border border-slate-300 px-4 py-3 text-sm text-slate-700">
+                        {selectedItem.claimed_date}
+                        {selectedItem.claimed_time ? ` ${selectedItem.claimed_time}` : ''}
+                      </div>
+                    </div>
+                  </div>
+                )}
 
                 <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                   <div>
@@ -1830,7 +2280,7 @@ const FoundItems = ({ searchFilter }) => {
 
                   {selectedItem.status !== 'Claimed' && (
                     <button
-                      onClick={() => handleClaimItem(selectedItem)}
+                      onClick={() => openClaimPrompt(selectedItem)}
                       className="flex-1 flex items-center justify-center gap-2 py-3 bg-purple-600 text-white rounded-xl font-bold uppercase text-sm hover:bg-purple-700 transition-all"
                     >
                       <CheckCircle size={16} /> Mark as Claimed
@@ -1879,6 +2329,22 @@ const FoundItems = ({ searchFilter }) => {
             setActiveConfirmation(null);
           }}
           onClose={() => setActiveConfirmation(null)}
+        />
+      )}
+
+      {/* Claimant Info Prompt — opened from the Review modal's "Mark as
+          Claimed" button (see openClaimPrompt above). */}
+      {claimPrompt && (
+        <ClaimantInfoModal
+          item={claimPrompt.item}
+          name={claimPrompt.name}
+          contact={claimPrompt.contact}
+          email={claimPrompt.email}
+          prefillLoading={claimPrompt.prefillLoading}
+          saving={claimPromptSaving}
+          onChange={updateClaimPromptField}
+          onConfirm={confirmClaimPrompt}
+          onClose={() => setClaimPrompt(null)}
         />
       )}
     </div>

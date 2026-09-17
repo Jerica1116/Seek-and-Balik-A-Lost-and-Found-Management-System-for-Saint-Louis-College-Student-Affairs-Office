@@ -345,12 +345,52 @@ def refresh_token(request):
 # =========================================================
 # CURRENT USER
 # =========================================================
-@api_view(["GET"])
+# GET  -> return the logged-in user's own account details.
+# PATCH -> self-service partial update of the logged-in user's own
+#          account (used by UserProfile.jsx's "Edit Profile" -> Save).
+#          This always acts on request.user rather than a pk from the
+#          URL, so a user can only ever edit their own account this
+#          way — never someone else's by guessing an id, unlike
+#          update_user() below which is the admin-editing-another-user
+#          path and takes an explicit pk.
+@api_view(["GET", "PATCH"])
 @permission_classes([IsAuthenticated])
 def current_user(request):
+
+    if request.method == "GET":
+        return Response(
+            AccountSerializer(request.user).data,
+            status=status.HTTP_200_OK,
+        )
+
+    # PATCH
+    serializer = AccountSerializer(
+        request.user,
+        data=request.data,
+        partial=True,
+    )
+
+    if serializer.is_valid():
+        account = serializer.save()
+
+        # Mirrors update_user()'s admin-promotion handling below, in
+        # case AccountSerializer ever exposes `role` as writable here.
+        # IMPORTANT: verify AccountSerializer marks role/is_active/
+        # is_current_admin/username as read_only_fields — this view has
+        # no pk-based restriction, so any authenticated user hitting
+        # this endpoint could otherwise edit those fields on their own
+        # account (e.g. self-promote to admin) via the request body.
+        if account.role == "admin":
+            if not account.is_current_admin:
+                account.is_current_admin = True
+                account.save(update_fields=["is_current_admin"])
+            _deactivate_other_admins(account)
+
+        return Response(AccountSerializer(account).data)
+
     return Response(
-        AccountSerializer(request.user).data,
-        status=status.HTTP_200_OK,
+        serializer.errors,
+        status=status.HTTP_400_BAD_REQUEST,
     )
 
 
